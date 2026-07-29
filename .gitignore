@@ -1,0 +1,22 @@
+# Python
+**/__pycache__/
+**/*.py[cod]
+*.egg-info/
+.venv/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# LaTeX build artifacts
+docs/*.aux
+docs/*.log
+docs/*.out
+docs/*.toc
+docs/*.synctex.gz
+docs/*.pdf
+
+# OS
+.DS_Store
+Thumbs.db

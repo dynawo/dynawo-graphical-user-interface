@@ -1,0 +1,9 @@
+pypowsybl
+pyyaml
+pandas
+fastapi
+uvicorn[standard]
+python-multipart
+passlib[bcrypt]
+python-jose[cryptography]
+pydantic-settings

@@ -1,0 +1,1042 @@
+\documentclass[a4paper,11pt]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[english]{babel}
+\usepackage{lmodern}
+\usepackage{geometry}
+\geometry{margin=2.5cm}
+\usepackage{hyperref}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!60!black,
+  urlcolor=blue!60!black,
+  pdftitle={Dynawo Graphical User Interface -- User Guide},
+}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{parskip}
+\usepackage{mdframed}
+\usepackage{microtype}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{amssymb}
+
+% ── Colour palette ────────────────────────────────────────────────────────────
+\definecolor{rteblu}{RGB}{0,84,166}
+\definecolor{codebg}{RGB}{245,245,245}
+\definecolor{notegreen}{RGB}{220,245,220}
+\definecolor{warnbrown}{RGB}{255,243,205}
+\definecolor{keywordblue}{RGB}{0,0,200}
+
+% ── Section titles ────────────────────────────────────────────────────────────
+\titleformat{\section}{\large\bfseries\color{rteblu}}{}{0em}{}[\titlerule]
+\titleformat{\subsection}{\normalsize\bfseries\color{rteblu!80!black}}{}{0em}{}
+\titleformat{\subsubsection}{\normalsize\itshape}{}{0em}{}
+
+% ── Code style ────────────────────────────────────────────────────────────────
+\lstset{
+  backgroundcolor=\color{codebg},
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  framerule=0pt,
+  rulecolor=\color{codebg},
+  xleftmargin=6pt,
+  xrightmargin=6pt,
+}
+\newcommand{\code}[1]{\texttt{\small #1}}
+
+% ── Callout boxes ─────────────────────────────────────────────────────────────
+\newmdenv[
+  backgroundcolor=notegreen,
+  linewidth=0pt,
+  innerleftmargin=8pt, innerrightmargin=8pt,
+  innertopmargin=6pt, innerbottommargin=6pt,
+]{notebox}
+
+\newmdenv[
+  backgroundcolor=warnbrown,
+  linewidth=0pt,
+  innerleftmargin=8pt, innerrightmargin=8pt,
+  innertopmargin=6pt, innerbottommargin=6pt,
+]{warnbox}
+
+% ── File-type badge ───────────────────────────────────────────────────────────
+\newcommand{\ftype}[1]{\texttt{\small\color{rteblu}#1}}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\begin{document}
+
+\begin{titlepage}
+  \centering
+  \vspace*{2cm}
+  \includegraphics[width=0.45\textwidth]{../resources/Dynawo-Logo-Color.png}\\[2em]
+  {\Huge\bfseries\color{rteblu} Dynawo Graphical User Interface}\\[0.5em]
+  {\Large User Guide}\\[4cm]
+  {\normalsize \today}
+  \vfill
+  {\small This document describes the Dynawo Graphical User Interface web application.
+  It is generated from \code{docs/user\_guide.tex}.}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+% ═════════════════════════════════════════════════════════════════════════════
+\section{Introduction}
+
+Dynawo Graphical User Interface is a browser-based application built with
+\textbf{FastAPI} (backend) and \textbf{React} (frontend) that lets engineers
+download and configure a Dynawo installation, upload Dynawo input files,
+visualise the network, edit model and solver parameters, run simulations, and
+compare results across multiple runs---all without leaving the browser.
+
+The application runs as a local web server. The sidebar lists all available
+pages in workflow order:
+
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{Dynawo Version} --- download a Dynawo release and configure the
+    executable path
+  \item \textbf{Upload Files} --- load input files into the session
+  \item \textbf{Network View} --- explore the grid topology
+  \item \textbf{Load Flow / DynaFlow} --- run a steady-state load flow
+    (OpenLoadFlow or DynaFlow) and optionally an N-1 security analysis
+  \item \textbf{Edit Parameters} --- modify dynamic model parameters
+  \item \textbf{Edit Solver Parameters} --- modify solver parameters
+  \item \textbf{Edit Curves} --- define which model variables Dynawo will export
+    to \code{curves.csv}
+  \item \textbf{Run Simulation} --- configure, launch, and compare simulations
+  \item \textbf{About} --- workflow overview
+\end{enumerate}
+
+Each browser tab gets its own isolated workspace (session). Sessions are
+created automatically on first connection and expire after one hour of
+inactivity.
+
+% ═════════════════════════════════════════════════════════════════════════════
+\section{Installation and Setup}
+
+\subsection{Prerequisites}
+
+\begin{itemize}[leftmargin=2em]
+  \item Python\,3.10 or later
+  \item Node.js\,18 or later (for development only --- not required to run a
+    pre-built release)
+  \item A working Dynawo installation, \emph{or} use the built-in download
+    feature on the \textbf{Dynawo Version} page (Section~\ref{sec:dynawoversion})
+\end{itemize}
+
+\subsection{Quick start (Linux/macOS)}
+\label{sec:quickstart}
+
+Two helper scripts at the repository root wrap the full development setup, so a
+new user only needs two commands:
+
+\begin{lstlisting}[language=bash]
+./install.sh   # create the virtualenv, install backend + frontend deps
+./run.sh       # start both servers, then open http://localhost:5173
+\end{lstlisting}
+
+\code{install.sh} checks the prerequisites above (Python, Node, npm), verifies
+that the PyPI and npm registries are reachable --- stopping with a proxy hint if
+they are not --- creates the \code{.venv} virtual environment, installs the
+Python dependencies, and runs \code{npm install} for the frontend. It is
+idempotent and safe to re-run.
+
+\code{run.sh} launches the FastAPI backend and the Vite development server
+together, waits until the frontend is ready, prints the URL to open, and shuts
+both servers down cleanly on \code{Ctrl+C}. Environment variables
+(Section~\ref{sec:deploy}) are passed through, e.g.\
+\code{SESSION\_TTL=7200 ./run.sh}.
+
+To reset a broken or stale install, re-run with \code{--clean}:
+
+\begin{lstlisting}[language=bash]
+./install.sh --clean   # remove .venv and frontend/node_modules, then reinstall
+\end{lstlisting}
+
+\begin{notebox}
+\code{--clean} keeps the tracked \code{frontend/package-lock.json} (so
+dependencies reinstall at their committed versions) and never touches
+downloaded Dynawo versions under
+\code{\textasciitilde/.config/dynawo\_ihm/}.
+\end{notebox}
+
+The manual steps in the following subsections remain available if you prefer to
+run each command yourself, and are also the basis for running on Windows.
+
+\subsection{Installing dependencies}
+
+\begin{lstlisting}[language=bash]
+# From the repo root (dynawo_IHM/)
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+\end{lstlisting}
+
+For frontend development only:
+
+\begin{lstlisting}[language=bash]
+cd frontend
+npm install
+\end{lstlisting}
+
+\subsection{Starting the application}
+
+\subsubsection{Development mode (two terminals)}
+
+Terminal 1 --- backend:
+\begin{lstlisting}[language=bash]
+source .venv/bin/activate
+uvicorn api.main:app --reload --port 8000
+\end{lstlisting}
+
+Terminal 2 --- frontend:
+\begin{lstlisting}[language=bash]
+cd frontend
+npm run dev
+\end{lstlisting}
+
+Open \code{http://localhost:5173} in your browser.
+The Swagger API documentation is available at \code{http://localhost:8000/docs}.
+
+\subsubsection{Production mode (pre-built release)}
+
+If a pre-built \code{dist/} directory is present, the FastAPI server serves
+both the API and the frontend on the same port:
+
+\begin{lstlisting}[language=bash]
+source .venv/bin/activate
+uvicorn api.main:app --host 0.0.0.0 --port 8000
+\end{lstlisting}
+
+Open \code{http://localhost:8000} in your browser.
+
+\subsubsection{Docker (recommended for external users)}
+
+\begin{lstlisting}[language=bash]
+docker pull ghcr.io/rte/dynawo-ihm:latest
+docker run -p 80:80 ghcr.io/rte/dynawo-ihm
+\end{lstlisting}
+
+Open \code{http://localhost} in your browser. No Python or Node installation
+required.
+
+% ═════════════════════════════════════════════════════════════════════════════
+\section{Session management}
+
+Each browser tab automatically receives its own isolated session when it first
+connects. The session holds all uploaded files, the network object, the Dynawo
+executable path, and the simulation run history.
+
+\subsection{Download Files}
+
+The \textbf{Download Files} button at the bottom of the sidebar packages the
+entire session working directory into a ZIP archive and downloads it to your
+browser. The archive contains:
+
+\begin{itemize}[leftmargin=2em]
+  \item All uploaded input files in their current state (including any
+    modifications applied via \textbf{Edit Parameters} or \textbf{Edit Solver
+    Parameters}).
+  \item All simulation output subdirectories (\code{outputs\_run1/},
+    \code{outputs\_run2/}, \ldots), including \code{curves/curves.csv} and any
+    other files produced by Dynawo.
+\end{itemize}
+
+\begin{notebox}
+\textbf{Works identically on a remote server.} The ZIP is built server-side
+and streamed over HTTP, so the button behaves the same whether the application
+is running locally or on a shared server.
+\end{notebox}
+
+\subsection{Clear Cache}
+
+The \textbf{Clear Cache} button at the bottom of the sidebar deletes the
+current session and all associated data (uploaded files, simulation history).
+The page reloads automatically and a fresh session is created.
+
+\begin{notebox}
+\textbf{Simulation output directories are deleted by Clear Cache.}
+Output directories written with a relative path (e.g.\ \code{outputs\_run1/})
+live inside the session's temporary working directory and are deleted together
+with it. Download your results with \textbf{Download Files} before clearing
+the cache if you need to keep them.
+\end{notebox}
+
+\subsection{Session expiry}
+
+Sessions that have had no activity for more than one hour are evicted
+automatically by the server. The \code{SESSION\_TTL} environment variable
+controls this timeout (default: 3600\,s).
+
+% ═════════════════════════════════════════════════════════════════════════════
+\section{Page 1 --- Dynawo Version}
+\label{sec:dynawoversion}
+
+This page centralises everything related to the Dynawo executable: configuring
+the path to an existing installation and downloading a new one directly from
+GitHub.
+
+\subsection{Dynawo executable}
+
+Enter the absolute path to the Dynawo launcher (\code{dynawo.sh} on Linux) and
+click \textbf{Set}. Alternatively, click \textbf{Browse} to open a server-side
+file browser; \code{.sh} files are highlighted and clickable --- selecting one
+fills the path field automatically. The path is stored server-side for the
+lifetime of the session.
+
+\subsection{Downloaded versions}
+
+The \emph{Available Dynawo Versions} section lists every version that has
+already been downloaded on the server:
+
+\begin{description}[leftmargin=2em]
+  \item[\textbf{Use}] Sets the executable as active for the current session.
+    The currently active version is marked \emph{in use}.
+  \item[\textbf{Remove}] Deletes the extracted directory from
+    \code{\textasciitilde/.config/dynawo\_ihm/dynawo\_versions/}.
+\end{description}
+
+\subsection{Downloading a new version}
+
+Select the target OS (auto-detected) and version, then click \textbf{Download}.
+A live progress bar streams download progress via Server-Sent Events --- the
+rest of the interface remains usable. Once extraction is complete a
+\textbf{Use this version} button activates it immediately.
+
+% ═════════════════════════════════════════════════════════════════════════════
+\section{Page 2 --- Upload Files}
+
+This page loads Dynawo input files into the session working directory.
+
+\subsection{Uploading files}
+
+Use the file picker (or drag and drop) to upload one or more files. Supported
+types are detected automatically from the XML root element:
+
+\begin{center}
+\begin{tabularx}{0.75\linewidth}{llX}
+\toprule
+\textbf{Extension} & \textbf{Type tag} & \textbf{Role} \\
+\midrule
+\code{.jobs}  & \ftype{jobs}  & Simulation job descriptor \\
+\code{.dyd}   & \ftype{dyd}   & Dynamic model wiring \\
+\code{.par}   & \ftype{par}   & Model parameters \\
+\code{.crv}   & \ftype{crv}   & Curves to export \\
+\code{.iidm}  & \ftype{iidm}  & Static network (IIDM format) \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Managing uploaded files}
+
+Each file appears in a list with its name, type, and size. Available actions:
+
+\begin{description}[leftmargin=2em]
+  \item[\textbf{Replace}] Upload a new version of the file without changing its
+    name.
+  \item[\textbf{Unload}] Remove the file from the session.
+\end{description}
+
+\subsection{Auto-loading referenced files}
+\label{sec:autoload}
+
+A \ftype{jobs} file contains references (absolute or relative paths) to the
+companion \ftype{dyd}, \ftype{par}, \ftype{iidm}, and \ftype{crv} files.
+Whenever a \ftype{jobs} file is present in the session, an
+\emph{Auto-load referenced files} card appears, offering two strategies to
+resolve those references automatically.
+
+\subsubsection{From filesystem}
+
+Use this mode when the application runs locally (server and files are on the
+same machine).
+
+\begin{enumerate}[leftmargin=2em]
+  \item Click \textbf{From filesystem} to open the dialog.
+  \item The \emph{base directory} field is pre-filled from absolute paths found
+    in the \ftype{jobs} file. Adjust it if needed, or click \textbf{Browse}
+    to navigate the server filesystem interactively. The picker remembers the
+    last visited directory across dialog opens.
+  \item Click \textbf{Preview} to check whether all referenced files are found.
+    A table shows each file role with a \checkmark{} (found) or
+    \texttimes{} (not found at that location).
+  \item Click \textbf{Load files} to copy all found files into the session
+    working directory. The \ftype{jobs} and \ftype{dyd} files are rewritten
+    so that every path becomes a bare filename.
+\end{enumerate}
+
+\subsubsection{From ZIP archive}
+
+Use this mode when the application runs on a remote server or when the original
+files are not directly reachable from the server.
+
+\begin{enumerate}[leftmargin=2em]
+  \item Pack the directory that contains your case files (including the
+    \ftype{jobs} file) into a single \code{.zip} archive, preserving the
+    internal directory tree.
+  \item Click \textbf{From ZIP archive}, then drag and drop (or click to
+    select) the archive.
+  \item The server extracts the archive, locates the single \ftype{jobs} file,
+    and runs the same copy-and-rewrite pipeline as the filesystem mode.
+\end{enumerate}
+
+\subsubsection{Automatic path fixing}
+
+Every time a file is added to the session --- by manual upload, \textbf{Replace},
+or either auto-load mode --- the application silently rewrites path references
+in the \ftype{jobs} and \ftype{dyd} files. Any reference whose filename matches
+a file already present in the session is replaced by a bare filename. This means
+that uploading all files individually (without using the auto-load dialog) also
+produces a consistent, self-contained working directory.
+
+\begin{notebox}
+\textbf{Original files are never modified.} All copy and rewrite operations
+target the session's temporary working directory only.
+\end{notebox}
+
+\subsection{Network loading}
+
+When an \ftype{iidm} file is present in the session, a \textbf{Load} button
+appears next to the filename and loads it with pypowsybl, displaying a summary
+of buses, lines, generators, and loads.
+
+\begin{notebox}
+\textbf{Auto-loading on the Network View page.} If you navigate to
+\textbf{Network View} without having clicked \textbf{Load}, the application
+detects the first available \ftype{iidm} file and loads it automatically.
+\end{notebox}
+
+% ═════════════════════════════════════════════════════════════════════════════
+\section{Page 3 --- Network View}
+
+Requires a loaded \ftype{iidm} network.
+
+\subsection{Network source}
+\label{sec:netsource}
+
+By default the page visualises the \textbf{uploaded IIDM} file. If one or more
+completed runs have exported a final-state IIDM (i.e.\ the \ftype{jobs} file
+contains a \code{<finalState exportIIDMFile="..."/>} element and the simulation
+succeeded), a \textbf{Network source} drop-down appears above the diagrams. Use
+it to switch between:
+
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{Uploaded IIDM} --- the reference network as originally provided.
+  \item \textbf{Run N --- final state} --- the post-simulation network state for
+    that run.
+\end{itemize}
+
+Switching source reloads the element list; the cascader filter and the currently
+open voltage-level diagram are preserved when the selected voltage level exists
+in the new network.
+
+\subsection{Network Area Diagram (NAD)}
+
+Full network as an SVG graph. Scroll to zoom, drag to pan, double-click to
+reset.
+
+\subsection{Single Line Diagram (SLD)}
+
+One-line diagram for a selected voltage level. Click a feeder arrow to navigate
+to the connected voltage level.
+
+\subsubsection{Search}
+
+A cascading search picker at the top of the tab lets you locate any element in
+the network:
+
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{Browse by type} --- hover or click a category (Voltage Levels,
+    Generators, Loads, Lines, 2W/3W~Transformers, Shunt Compensators, etc.) to
+    expand the list of matching elements.
+  \item \textbf{Type to search} --- start typing an element ID, name, or
+    voltage-level ID; the picker filters across all categories simultaneously
+    and shows results as \emph{Type\,›\,Element~(VL)}.
+\end{itemize}
+
+Selecting any element from the list navigates the diagram to its voltage level.
+
+\subsubsection{Dynamic model overlay}
+
+When a \ftype{dyd} file is uploaded, components with an associated dynamic
+model are highlighted with a coloured glow (one colour per library). Clicking a
+highlighted component opens an inline parameter editor
+(Section~\ref{sec:editparams}).
+
+While the overlay is active the search picker gains an additional top-level
+category \textbf{Dynamic Models}. Expanding it reveals one group per library
+(e.g.\ \emph{GeneratorSynchronousFourWindings}), each containing the IIDM
+components that use that library. Typing the library name in the search box
+narrows to those components directly.
+
+\subsection{Diff view}
+\label{sec:diffview}
+
+Available when a final-state IIDM source is selected
+(Section~\ref{sec:netsource}). A \textbf{Diff view} toggle appears next to the
+source drop-down; enabling it re-renders both diagrams with elements
+colour-coded according to how much each physical quantity changed between the
+reference (uploaded) network and the selected final-state network.
+
+\subsubsection{Colour legend}
+
+A legend card is displayed below the toolbar when diff view is active. By
+default two colours are used:
+
+\begin{itemize}[leftmargin=2em]
+  \item {\fboxsep=2pt\colorbox[HTML]{faad14}{\phantom{XX}}} \textbf{Amber} --- moderate
+    change (1\,\% to 5\,\%).
+  \item {\fboxsep=2pt\colorbox[HTML]{f5222d}{\phantom{XX}}} \textbf{Red}
+    --- large change ($>$\,5\,\%).
+\end{itemize}
+
+\subsubsection{Diff settings}
+
+Clicking the \textbf{gear icon} next to the toggle opens a settings panel with
+the following options:
+
+\begin{description}[leftmargin=2em]
+  \item[\textbf{Moderate / Large threshold (\%)}] Relative-change thresholds
+    that separate the three bands (below moderate, moderate, large). The
+    relative change is computed as $|\Delta x| / \max(|x_{\mathrm{ref}}|,\,\varepsilon)$
+    where $\varepsilon$ prevents division by zero. Bus voltages are normalised by
+    the nominal voltage of their voltage level.
+  \item[\textbf{Signed deviations}] When enabled, increases and decreases are
+    shown in separate colour pairs (warm tones for increase, cool blue tones for
+    decrease). When disabled (default) only the magnitude is considered and a
+    single pair of colours is used.
+  \item[\textbf{Colours}] Each colour band has an independent colour picker.
+    In unsigned mode two pickers are shown (moderate / large); in signed mode
+    four pickers are shown (increase moderate, increase large, decrease moderate,
+    decrease large).
+  \item[\textbf{Highlighted quantities}] Checkboxes to select which physical
+    quantities drive the colouring:
+    \begin{itemize}[leftmargin=1.5em]
+      \item \textbf{Bus voltage} --- per-bus $v_{\mathrm{mag}}$ change (affects both
+        NAD and SLD).
+      \item \textbf{Branch current} --- per-branch $i_1 / i_2$ change; the side
+        with the larger absolute change is used (affects both NAD and SLD).
+      \item \textbf{Active power} --- per-generator / per-load $P$ change
+        (affects SLD only; injections are not drawn in the NAD).
+    \end{itemize}
+  \item[\textbf{Reset to defaults}] Restores all settings to their initial
+    values.
+\end{description}
+
+\begin{notebox}
+Any change to the diff settings (thresholds, colours, quantities, or signed
+mode) triggers an immediate re-render of both diagrams without requiring a page
+reload.
+\end{notebox}
+
+% ═════════════════════════════════════════════════════════════════════════════
+\section{Page 4 --- Load Flow / DynaFlow}
+\label{sec:loadflow}
+
+Runs a steady-state power-flow calculation using pypowsybl --- no Dynawo
+executable required. Two providers are offered in separate cards:
+\textbf{OpenLoadFlow} (fully integrated, no extra binaries) and
+\textbf{DynaFlow} (time-domain initialisation via the DynaFlow-launcher binary).
+
+Requires at least one \ftype{iidm} file in the session. Parameter choices are
+remembered across page navigations.
+
+\subsection{OpenLoadFlow}
+
+\subsubsection{Running a load flow}
+
+Select the input \ftype{iidm} file, expand \textbf{Parameters} to adjust
+settings if needed, then click \textbf{Run}. The result \ftype{xiidm} is
+written to the session and is immediately available in the \textbf{Network
+View} final-state drop-down (Section~\ref{sec:netsource}).
+
+\subsubsection{Parameters}
+
+The \textbf{Parameters} collapse panel exposes generic load-flow fields (AC/DC
+mode, voltage initialisation mode, balance type, etc.) and a provider-specific
+block populated dynamically from pypowsybl's own parameter catalogue. Default
+values reflect pypowsybl's built-in defaults.
+
+\subsection{DynaFlow}
+
+\subsubsection{DynaFlow Launcher}
+\label{sec:dynaflowlauncher}
+
+DynaFlow requires the \textbf{dynaflow-launcher} binary, managed separately from
+the Dynawo executable:
+
+\begin{description}[leftmargin=2em]
+  \item[\textbf{Path field}] Enter or browse to the directory that contains
+    \code{dynaflow-launcher.sh} and click \textbf{Set}. The path persists across
+    sessions.
+  \item[\textbf{Download}] Select a target OS and version from the lists, then
+    click \textbf{Download}. A live progress bar streams the extraction; once
+    complete a \textbf{Use} button activates the version. Multiple downloaded
+    versions can coexist; the one marked \emph{in use} is active.
+  \item[\textbf{Update}] Re-downloads and replaces a version in-place without
+    manual deletion.
+  \item[\textbf{Remove}] Deletes the downloaded version from disk.
+\end{description}
+
+Switching the active version restarts the internal pypowsybl worker pool so the
+new binary takes effect immediately --- no server restart required.
+
+\subsubsection{Starting Point Mode}
+\label{sec:startingpoint}
+
+A \textbf{Starting Point Mode} toggle appears in the \textbf{Parameters} section
+when DynaFlow is selected:
+
+\begin{center}
+\begin{tabularx}{0.6\linewidth}{lX}
+\toprule
+\textbf{Mode} & \textbf{Voltage initialisation strategy} \\
+\midrule
+\textbf{WARM} (default) & \code{DC\_VALUES} --- DC load-flow pre-initialisation \\
+\textbf{FLAT}           & \code{UNIFORM\_VALUES} --- flat start \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+The mode is a global setting written to the server configuration; changing it
+restarts the pypowsybl worker pool (same mechanism as switching the launcher
+version). The selected mode is preserved across page navigations.
+
+\subsubsection{Parameters}
+
+DynaFlow's \textbf{Parameters} panel shows only the DynaFlow-specific provider
+parameters (start time, stop time, precision, chosen outputs, etc.). Generic
+load-flow fields such as AC/DC mode and voltage initialisation mode are not
+shown because DynaFlow controls them internally or via the Starting Point Mode
+setting.
+
+\subsubsection{Running the simulation}
+
+Click \textbf{Run}. DynaFlow-launcher generates its own \code{.dyd},
+\code{.par}, and \code{config.json} input files internally, runs the simulation,
+and writes results to the session.
+
+\paragraph{Keep input files.}
+Enable the \textbf{Keep input files (.dyd/.par)} toggle before clicking
+\textbf{Run} to save the full set of files generated by DynaFlow-launcher to
+the session before they are cleaned up:
+
+\begin{itemize}[leftmargin=2em]
+  \item \code{config.json} --- DynaFlow-launcher entry configuration
+  \item \code{*.dyd} --- dynamic model wiring generated for this run
+  \item \code{*.par} --- model parameters (including HVDC lookup tables if present)
+  \item \code{*.jobs} --- reconstructed simulation job descriptor
+\end{itemize}
+
+These files appear in the session file list and are included in the
+\textbf{Download Files} ZIP.
+
+\subsubsection{Output files}
+
+Regardless of the \emph{Keep input files} setting, DynaFlow output files are
+always recovered from the run directory and saved to the session:
+
+\begin{description}[leftmargin=2em]
+  \item[\code{*\_timeline.xml}] Timeline of events during the simulation.
+  \item[\code{*\_constraints.xml}] Active constraint violations (when
+    \code{CONSTRAINTS} is in \code{chosenOutputs}).
+  \item[\code{*\_dynawo.log}] DynaFlow console log.
+  \item[\code{*\_lostEquipments.xml}] Equipment that went out of service.
+\end{description}
+
+Click \textbf{View outputs} on the result card to inspect these files directly
+in the browser.
+
+\subsection{Security Analysis (N-1) --- DynaFlow only}
+\label{sec:securityanalysis}
+
+The \textbf{Security analysis (N-1)} collapse panel is available on the DynaFlow
+card. It runs a systematic contingency analysis using the same DynaFlow-launcher
+infrastructure.
+
+\subsubsection{Element selection}
+
+A searchable multi-select lists all network elements eligible for single-element
+contingencies (lines, transformers, generators, etc.). Select the elements to
+include, then click \textbf{Run security analysis}.
+
+\subsubsection{Results}
+
+The results table shows a row per contingency with:
+
+\begin{itemize}[leftmargin=2em]
+  \item The contingency element ID.
+  \item The post-contingency load-flow status (CONVERGED, FAILED, \ldots).
+  \item The number of limit violations and a \textbf{Details} expander listing
+    each violation (element, limit type, value, acceptable duration).
+  \item A \textbf{View outputs} button for the per-contingency timeline,
+    constraints, log, and lost-equipments files.
+\end{itemize}
+
+A separate row at the top shows the pre-contingency (N) state with the same
+fields.
+
+% ═════════════════════════════════════════════════════════════════════════════
+\section{Page 5 --- Edit Dynamic Models Parameters}
+\label{sec:editparams}
+
+Requires a \ftype{dyd} file and at least one \ftype{par} file.
+
+\subsection{Selecting a model}
+
+All \code{blackBoxModel} entries from the \ftype{dyd} file are listed in a
+dropdown.
+
+\begin{warnbox}
+\textbf{Shared parameter sets.} If multiple models share the same PAR file and
+parameter set ID, editing one will affect all.
+\end{warnbox}
+
+\subsection{Editing parameters}
+
+Each parameter row shows its name, type (\code{BOOL}, \code{INT},
+\code{DOUBLE}), current value, and an appropriate input widget. Click
+\textbf{Apply changes} to write the new values to disk; changed rows are
+highlighted in amber until the operation is confirmed.
+
+\subsection{Change log}
+
+Every \textbf{Apply} operation appends an entry to the change log, grouped by
+dynamic model ID. Each entry lists the timestamp, PAR file, parameter set, and
+the old/new value for every modified parameter. Two actions are available per
+entry:
+
+\begin{description}[leftmargin=2em]
+  \item[\textbf{Revert}] Writes back the old values for that specific operation
+    and removes the entry from the log. If a later operation modified the same
+    parameters, a warning is shown because the file state may become
+    inconsistent.
+  \item[\textbf{Clear}] Removes all log entries for a given model without
+    touching the PAR file.
+\end{description}
+
+\subsection{Restoring original values}
+
+Whenever a PAR file's current content differs from what was originally uploaded,
+a warning banner appears at the top of the page with a \textbf{Restore original}
+button. Clicking it overwrites the PAR file with the originally uploaded bytes
+and clears the change log entries for that file. The banner disappears once the
+file is back to its original state.
+
+\begin{notebox}
+The \textbf{Restore original} button is driven by actual file content, not by
+the change log. It is visible even if the log was cleared manually, and it
+disappears as soon as the file matches the original --- regardless of log state.
+\end{notebox}
+
+% ═════════════════════════════════════════════════════════════════════════════
+\section{Page 6 --- Edit Solver Parameters}
+
+Targets the solver defined in the \code{<solver>} element of the \ftype{jobs}
+file. The interface is identical to Section~\ref{sec:editparams}: the same
+parameter table, change log, per-entry \textbf{Revert}, and
+\textbf{Restore original} banner.
+
+The solver uses a separate change log from the dynamic-model parameters, so
+both logs can be managed independently.
+
+% ═════════════════════════════════════════════════════════════════════════════
+\section{Page 7 --- Edit Curves}
+\label{sec:editcurves}
+
+This page manages the \ftype{crv} file that tells Dynawo which model output
+variables to write to \code{curves/curves.csv} during a simulation. Requires
+a \ftype{dyd} file in the session. A configured Dynawo executable
+(Section~\ref{sec:dynawoversion}) unlocks the variable catalogue.
+
+\subsection{Creating a curves file from scratch}
+
+If no \ftype{crv} file is linked in the session, the page shows a creation
+dialog:
+
+\begin{enumerate}[leftmargin=2em]
+  \item Review or edit the suggested filename (derived automatically from the
+    \ftype{jobs} or \ftype{dyd} file stem).
+  \item Click \textbf{Create}. The application creates an empty \ftype{crv}
+    file and, if a \ftype{jobs} file is present, automatically inserts the
+    \code{<curves inputFile="..."/>} reference into it.
+\end{enumerate}
+
+\subsection{Selecting variables}
+
+Models from the \ftype{dyd} file appear as collapsible panels. Each panel
+header shows the model ID, its library tag, and a badge with the count of
+selected variables over the total available. Inside each panel:
+
+\begin{itemize}[leftmargin=2em]
+  \item A \textbf{Select all} checkbox toggles every listed variable at once.
+  \item Individual checkboxes enable or disable each variable. Rows changed
+    since the last apply are highlighted: \emph{will add} (green) or
+    \emph{will remove} (red).
+\end{itemize}
+
+\subsection{Variable catalogue}
+
+When a Dynawo executable is configured, the application reads the descriptor
+files for each model library and makes the full list of available variables
+accessible:
+
+\begin{description}[leftmargin=2em]
+  \item[\textbf{Dropdown picker}] Each model panel shows a searchable dropdown
+    listing all catalogue variables not yet in the \ftype{crv} file. Selecting
+    a variable adds it immediately.
+  \item[\textbf{Add all (N)}] Button next to the picker; adds all remaining
+    catalogue variables for that model in one click. \emph{N} is the count of
+    variables that would be added.
+  \item[\textbf{Select all from catalogue}] Global button in the toolbar; adds
+    every catalogue variable across all models at once. Useful when creating a
+    \ftype{crv} file from scratch and wanting to start with the full set.
+\end{description}
+
+\subsection{Manual add}
+
+A form at the bottom of the page accepts a free-form \emph{Model ID} and
+\emph{Variable name}. Use this when no catalogue is available or to add a
+variable not listed in the descriptor files.
+
+\subsection{Applying changes}
+
+Click \textbf{Apply changes} to write the current selection to the \ftype{crv}
+file on disk. A success message reports how many curves were added or removed.
+
+\begin{warnbox}
+\textbf{Apply is required before running a simulation.} Pending changes
+(highlighted rows) are not reflected in the \ftype{crv} file until
+\textbf{Apply changes} is clicked.
+\end{warnbox}
+
+\subsection{Change log and revert}
+
+Every \textbf{Apply} appends an entry to the change log with a timestamp and
+the list of added/removed variables. Per-entry actions:
+
+\begin{description}[leftmargin=2em]
+  \item[\textbf{Revert}] Replays the inverse of that operation on the
+    \ftype{crv} file and removes the entry. If a later operation modified the
+    same variables, a warning is shown.
+  \item[\textbf{Clear all}] Removes all log entries without modifying the
+    \ftype{crv} file.
+\end{description}
+
+\subsection{Restoring the original file}
+
+When the \ftype{crv} file in the session differs from the originally uploaded
+version, a warning banner appears with a \textbf{Restore original} button.
+Clicking it overwrites the file with the originally uploaded bytes and clears
+the change log.
+
+% ═════════════════════════════════════════════════════════════════════════════
+\section{Page 8 --- Run Simulation}
+\label{sec:runsim}
+
+Requires a \ftype{jobs} file and a configured Dynawo executable.
+
+\subsection{Simulation parameters}
+
+\begin{description}[leftmargin=2em]
+  \item[\textbf{Start time (s)}] Must be non-negative.
+  \item[\textbf{Stop time (s)}] Must be strictly greater than start time.
+  \item[\textbf{Base output directory}] The suffix \code{\_run\textit{N}} is
+    appended automatically before each run.
+\end{description}
+
+\subsection{Running a simulation}
+
+Click \textbf{Run simulation} to write parameters to the \ftype{jobs} file,
+launch Dynawo, and stream console output live via Server-Sent Events. Click
+\textbf{Cancel} to terminate a running simulation.
+
+\subsection{Run history}
+
+Each completed run can be renamed, its output expanded, or deleted (which also
+removes the output directory from disk). When a run has produced a final-state
+IIDM file, a \textbf{View final state} button appears on the run card; clicking
+it navigates directly to \textbf{Network View} with that run's final-state
+network pre-selected as the source, ready for inspection or diff comparison
+(Section~\ref{sec:diffview}).
+
+\subsection{Curves comparison}
+\label{sec:curves}
+
+Appears when at least one successful run produced a \code{curves/curves.csv}
+file.
+
+\paragraph{Left panel.} Check runs and signals to include in the chart.
+Signals are grouped by model. Each signal has a line style selector
+(Solid, Dashed, Dotted, Dash-dot). The panel width can be adjusted by
+dragging the vertical divider between the panel and the chart; the width
+is remembered across page navigations.
+
+\paragraph{Derived curves.} Compute new signals from existing ones: Scale
+(multiply by a factor), Sum, or Difference.
+
+\begin{notebox}
+\textbf{Selections are preserved across navigation.} Checked curves, open
+model groups, and derived curves are restored automatically when you return to
+this page.
+\end{notebox}
+
+\paragraph{Right panel.} Interactive Plotly chart with unified x-hover.
+
+% ═════════════════════════════════════════════════════════════════════════════
+\section{Typical workflow}
+
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{Dynawo Version} --- configure or download the Dynawo executable.
+  \item \textbf{Upload Files} --- upload the \ftype{jobs} file (and optionally
+    all companion files). If only the \ftype{jobs} file is uploaded, use
+    \textbf{From filesystem} or \textbf{From ZIP archive}
+    (Section~\ref{sec:autoload}) to load the remaining files automatically.
+  \item \textbf{Load Flow / DynaFlow} (\emph{optional}) --- run a steady-state
+    power flow on the \ftype{iidm} to obtain a converged starting point.
+    Download and set the DynaFlow-launcher binary beforehand if using DynaFlow
+    (Section~\ref{sec:dynaflowlauncher}). The result \ftype{xiidm} appears
+    automatically in the \textbf{Network View} final-state picker. Skip this
+    step if the uploaded case already includes a converged network state.
+  \item \textbf{Edit Curves} --- define which variables to export. If the
+    uploaded case already includes a \ftype{crv} file, skip to step~5.
+    Otherwise click \textbf{Create}, then select the desired variables using
+    the catalogue picker or the \textbf{Select all from catalogue} button, and
+    click \textbf{Apply changes} (Section~\ref{sec:editcurves}).
+  \item \textbf{Run Simulation} --- run a first simulation (\emph{Run~1}).
+    The network is loaded automatically when you first visit \textbf{Network
+    View}.
+  \item \textbf{Edit Parameters} / \textbf{Edit Solver Parameters} --- adjust
+    parameters.
+  \item \textbf{Run Simulation} --- run a second simulation (\emph{Run~2}).
+  \item Compare curves for both runs. Rename runs to meaningful labels.
+  \item Repeat steps~6--8 as needed.
+\end{enumerate}
+
+% ═════════════════════════════════════════════════════════════════════════════
+\section{Server deployment}
+\label{sec:deploy}
+
+\subsection{Environment variables}
+
+\begin{center}
+\begin{tabularx}{\linewidth}{llX}
+\toprule
+\textbf{Variable} & \textbf{Default} & \textbf{Description} \\
+\midrule
+\code{SESSION\_TTL}              & \code{3600} & Seconds of inactivity before
+  session eviction \\
+\code{MAX\_CONCURRENT\_SIMS}   & \code{4}    & Maximum simultaneous Dynawo
+  processes across all users \\
+\code{PYPOWSYBL\_WORKERS}      & \code{2}    & Number of persistent worker
+  processes in the pypowsybl pool (each runs one load-flow or DynaFlow job at
+  a time) \\
+\code{MAX\_CONCURRENT\_PYPOWSYBL} & \code{2} & Maximum concurrent pypowsybl
+  tasks accepted before new requests are queued; should match
+  \code{PYPOWSYBL\_WORKERS} \\
+\code{ADMIN\_KEY}              & ---         & Secret for
+  \code{GET /api/admin/sessions} (\code{X-Admin-Key} header) \\
+\code{DYNAWO\_DEFAULT\_EXE}    & ---         & Pre-set executable path for all
+  new sessions \\
+\code{STANDALONE}              & \code{0}    & Set to \code{1} to allow absolute
+  output directory paths (local single-user use only) \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Admin endpoint}
+
+\code{GET /api/admin/sessions} returns active session count and per-session
+summary (idle time, files, network loaded, simulation running).
+
+% ═════════════════════════════════════════════════════════════════════════════
+\section{Keyboard shortcuts and tips}
+
+\begin{description}[leftmargin=2em]
+  \item[SLD / NAD zoom reset] Double-click anywhere on the diagram.
+  \item[Hover tooltip] Move the cursor horizontally over the chart to read all
+    traces at the same time step.
+  \item[Plotly toolbar] Hover the chart to reveal download, zoom, pan, and
+    autoscale controls (top-right corner).
+  \item[Run labels] Rename runs immediately after each simulation for a
+    self-explanatory legend (e.g.\ \emph{Base case}, \emph{$X_d' = 0.3$}).
+  \item[Download Files] Use the sidebar button to export all input files and
+    simulation results as a ZIP archive before clearing the cache or ending
+    the session.
+  \item[Clear Cache] Use the sidebar button to reset the session without
+    restarting the server.
+\end{description}
+
+% ═════════════════════════════════════════════════════════════════════════════
+\section{Troubleshooting}
+
+\begin{description}[leftmargin=2em]
+  \item[Page is blank on first load] Ensure the FastAPI server is running on
+    port 8000 and reachable from the browser.
+  \item[Simulation fails --- \emph{command not found}] Verify the correct
+    Dynawo version is selected (\emph{in use}) on the \textbf{Dynawo Version}
+    page.
+  \item[Simulation fails --- \emph{shared library error}] Remove the affected
+    version and re-download it.
+  \item[Simulation fails instantly (exit code 1)] Verify the executable path
+    and that the file is marked executable (\code{chmod +x dynawo.sh}).
+  \item[Dynawo download fails] Check your internet connection or whether the
+    GitHub release URL is outdated; open \textbf{Dynawo Version} and try a
+    different version.
+  \item[Auto-load preview shows \texttimes{} for all files] The base directory
+    is incorrect. The field is pre-filled from absolute paths in the
+    \ftype{jobs} file; if those paths are relative, enter the directory
+    manually or use \textbf{Browse}.
+  \item[Simulation fails --- file not found] Path references in the
+    \ftype{jobs} or \ftype{dyd} files were not resolved. Use
+    \textbf{From filesystem} or \textbf{From ZIP archive} to let the tool
+    copy and rewrite them, or ensure all files are uploaded individually so
+    that automatic path fixing can match them by filename.
+  \item[No curves displayed after a successful run] Verify a \ftype{crv} file
+    is linked in the session and referenced in the \ftype{jobs} file under
+    \code{<outputs><curves inputFile="..."/>}. If you created the \ftype{crv}
+    file via \textbf{Edit Curves}, the jobs file is patched automatically.
+    Also confirm that at least one variable is selected and that
+    \textbf{Apply changes} was clicked before the simulation was launched.
+    Runs that pre-date the creation of the \ftype{crv} file will not show
+    curves; only runs started after applying a curve selection will produce
+    output.
+  \item[Parameter changes not reflected in simulation] Confirm you clicked
+    \textbf{Apply}. The change log shows committed edits.
+  \item[Session expired] Sessions expire after \code{SESSION\_TTL} seconds of
+    inactivity. Re-upload files and restart the workflow.
+  \item[503 --- server at capacity] \code{MAX\_CONCURRENT\_SIMS} reached. Wait
+    for a running simulation to finish.
+  \item[Load flow fails --- \emph{DynaFlow homeDir not set}] No DynaFlow-launcher
+    binary is configured. Open \textbf{Load Flow / DynaFlow}, expand
+    \textbf{DynaFlow Launcher}, download a version or enter the path manually,
+    and click \textbf{Set} / \textbf{Use}.
+  \item[DynaFlow run produces no output files] Check the \code{dynawo.log}
+    (available via \textbf{View outputs} on the result card) for JVM or
+    network errors. A missing or wrong \code{dynaflow-launcher.sh} path is the
+    most common cause.
+  \item[Starting Point Mode change has no effect] The mode change restarts the
+    pypowsybl worker pool asynchronously. Wait a moment and run again; if the
+    problem persists, restart the server to force fresh workers.
+  \item[DynaFlow load flow runs but result diverges] Try switching
+    \textbf{Starting Point Mode} from WARM to FLAT (or vice versa) and
+    re-running. A flat start can help when the DC pre-initialisation produces
+    a poor estimate for the network state.
+  \item[Security analysis shows no results] Ensure at least one element is
+    selected in the contingency list before clicking \textbf{Run security
+    analysis}. Results are per-contingency; the pre-contingency N row always
+    appears first.
+  \item[Load flow / DynaFlow parameters reset on navigation] Parameters are
+    saved to \code{sessionStorage} and restored on return. If they still reset,
+    the browser's session storage may be disabled or over its quota.
+\end{description}
+
+\end{document}

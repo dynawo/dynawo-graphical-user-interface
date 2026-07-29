@@ -1,0 +1,7 @@
+{
+  "Linux": {
+    "master": {
+      "url": "https://github.com/dynawo/dynaflow-launcher/releases/download/nightly/DynaFlowLauncher_v1.8.0.zip"
+    }
+  }
+}
