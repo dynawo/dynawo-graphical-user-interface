@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { loadCurves, saveCurves, curvesCache } from './curvesStore'
-import type { DashStyle, DerivedCurve, CurvesInfo, CurvesData } from './curvesStore'
+import type { AxisSide, DashStyle, DerivedCurve, CurvesInfo, CurvesData, Placement } from './curvesStore'
 import {
   Alert, Button, Card, Checkbox, Collapse, Divider, Flex, Input,
   Popconfirm, Select, Space, Spin, Tag, Typography,
@@ -55,6 +55,43 @@ const COLORS = [
   '#19D3F3', '#FF6692', '#B6E880', '#FF97FF', '#FECB52',
 ]
 const DASH_OPTS = ['solid', 'dash', 'dot', 'dashdot'] as const
+
+const DEFAULT_PLACEMENT: Placement = { plot: 0, side: 'left' }
+// Plotly's typings can't express dynamically numbered axes (yaxis5, x3, …), so
+// the axis map is kept loosely typed and cast once when handed to Plotly.
+type AxisMap = Record<string, Record<string, unknown>>
+// Vertical gap between two stacked subplots, as a fraction of the plot area.
+const SUBPLOT_GAP = 0.09
+
+// Plotly axis names. Each subplot slot owns two y axes: an odd-numbered one for
+// its left side and the next even-numbered one overlaying it on the right.
+// Slot 0 → y / y2, slot 1 → y3 / y4, ...
+function yAxisNum(slot: number, side: AxisSide): number {
+  return 2 * slot + (side === 'left' ? 1 : 2)
+}
+function yRef(slot: number, side: AxisSide): string {
+  const n = yAxisNum(slot, side)
+  return n === 1 ? 'y' : `y${n}`
+}
+function yKey(slot: number, side: AxisSide): string {
+  const n = yAxisNum(slot, side)
+  return n === 1 ? 'yaxis' : `yaxis${n}`
+}
+// Each subplot gets its own x axis so hover labels stay local to it; they are
+// tied together with `matches` so zooming/panning time stays synchronised.
+function xRef(slot: number): string {
+  return slot === 0 ? 'x' : `x${slot + 1}`
+}
+function xKey(slot: number): string {
+  return slot === 0 ? 'xaxis' : `xaxis${slot + 1}`
+}
+
+// Top-to-bottom vertical band of the figure occupied by a subplot slot.
+function slotDomain(slot: number, nPlots: number): [number, number] {
+  const h = (1 - SUBPLOT_GAP * (nPlots - 1)) / nPlots
+  const top = 1 - slot * (h + SUBPLOT_GAP)
+  return [Math.max(0, top - h), top]
+}
 
 function label(col: string, info: CurvesInfo): string {
   const p = info[col]
@@ -221,7 +258,7 @@ function RunItem({ run, onDelete, onRename, onStream, streaming }: RunItemProps)
 
 // ── Plotly chart wrapper ──────────────────────────────────────────────────────
 
-function PlotlyChart({ traces }: { traces: Plotly.Data[] }) {
+function PlotlyChart({ traces, axes, height }: { traces: Plotly.Data[]; axes: AxisMap; height: number }) {
   const divRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -231,16 +268,22 @@ function PlotlyChart({ traces }: { traces: Plotly.Data[] }) {
       traces as Plotly.Data[],
       {
         hovermode: 'x unified',
-        xaxis: { title: { text: 'Time (s)' } as any },
         legend: { orientation: 'h', yanchor: 'bottom', y: 1.02, xanchor: 'right', x: 1 },
         margin: { t: 40 },
         autosize: true,
-      },
+        ...axes,
+      } as unknown as Partial<Plotly.Layout>,
       { responsive: true },
     )
-  }, [traces])
+  }, [traces, axes])
 
-  return <div ref={divRef} style={{ width: '100%', height: 500 }} />
+  // Plotly only re-reads the container size on resize, so force a relayout when
+  // the number of subplots changes the height.
+  useEffect(() => {
+    if (divRef.current) Plotly.Plots.resize(divRef.current)
+  }, [height])
+
+  return <div ref={divRef} style={{ width: '100%', height }} />
 }
 
 // ── Curves builder ────────────────────────────────────────────────────────────
@@ -262,10 +305,11 @@ function CurvesBuilder({ runs, jobsFile }: CurvesProps) {
   const [selectedRuns,    setSelectedRuns]    = useState<Set<number>>(() => new Set(saved?.selectedRuns ?? []))
   const [selectedCols,    setSelectedCols]    = useState<Set<string>>(() => new Set(saved?.selectedCols ?? []))
   const [dashStyles,      setDashStyles]      = useState<Record<string, DashStyle>>(() => saved?.dashStyles ?? {})
+  const [placements,      setPlacements]      = useState<Record<string, Placement>>(() => saved?.placements ?? {})
   const [derivedCurves,   setDerivedCurves]   = useState<DerivedCurve[]>(() => saved?.derivedCurves ?? [])
   const [selectedDerived, setSelectedDerived] = useState<Set<number>>(() => new Set(saved?.selectedDerived ?? []))
   const [openModels,      setOpenModels]      = useState<string[]>(() => saved?.openModels ?? [])
-  const [panelWidth,      setPanelWidth]      = useState<number>(() => saved?.panelWidth ?? 280)
+  const [panelWidth,      setPanelWidth]      = useState<number>(() => saved?.panelWidth ?? 320)
 
   // Persist selections to sessionStorage whenever they change
   useEffect(() => {
@@ -273,12 +317,13 @@ function CurvesBuilder({ runs, jobsFile }: CurvesProps) {
       selectedRuns:    [...selectedRuns],
       selectedCols:    [...selectedCols],
       dashStyles,
+      placements,
       derivedCurves,
       selectedDerived: [...selectedDerived],
       openModels,
       panelWidth,
     })
-  }, [selectedRuns, selectedCols, dashStyles, derivedCurves, selectedDerived, openModels, panelWidth])
+  }, [selectedRuns, selectedCols, dashStyles, placements, derivedCurves, selectedDerived, openModels, panelWidth])
 
   // Keep memory cache up to date for instant restore within the same page session
   useEffect(() => { curvesCache.runData    = runData    }, [runData])
@@ -345,7 +390,7 @@ function CurvesBuilder({ runs, jobsFile }: CurvesProps) {
     const startW = panelWidth
     const onMove = (ev: MouseEvent) => {
       if (!dragging.current) return
-      setPanelWidth(Math.max(180, Math.min(600, startW + ev.clientX - startX)))
+      setPanelWidth(Math.max(220, Math.min(640, startW + ev.clientX - startX)))
     }
     const onUp = () => { dragging.current = false; window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
     window.addEventListener('mousemove', onMove)
@@ -371,6 +416,22 @@ function CurvesBuilder({ runs, jobsFile }: CurvesProps) {
     ;(byModel[model] ??= []).push(col)
   }
 
+  // ── Subplot / axis layout ───────────────────────────────────────────────────
+  // Every plotted curve carries a placement (subplot index + left/right axis).
+  // Placements the user has moved away from leave holes in the numbering, so the
+  // indices actually in use are compacted to consecutive display slots.
+  const placementOf = (key: string): Placement => placements[key] ?? DEFAULT_PLACEMENT
+  const plottedKeys = [
+    ...[...selectedCols].filter(col => Object.values(runData).some(d => col in d.signals)),
+    ...[...selectedDerived].filter(i => derivedCurves[i]).map(i => `dc_${i}`),
+  ]
+  const usedPlots = [...new Set(plottedKeys.map(k => placementOf(k).plot))].sort((a, b) => a - b)
+  const slotOfPlot = new Map(usedPlots.map((p, i) => [p, i]))
+  const nPlots = Math.max(1, usedPlots.length)
+  const slotOf = (key: string) => slotOfPlot.get(placementOf(key).plot) ?? 0
+  // Which axes actually carry data, so empty ones can be hidden.
+  const liveAxes = new Set(plottedKeys.map(k => `${slotOf(k)}:${placementOf(k).side}`))
+
   // Build Plotly traces
   const traces: Plotly.Data[] = []
   let colorIdx = 0
@@ -382,12 +443,14 @@ function CurvesBuilder({ runs, jobsFile }: CurvesProps) {
     for (const col of selectedCols) {
       if (!(col in data.signals)) continue
       const dash = dashStyles[col] ?? 'solid'
+      const slot = slotOf(col)
       traces.push({
         type: 'scatter', mode: 'lines',
         x: data.time, y: data.signals[col],
         name: multiRun ? `${run.label} — ${label(col, curvesInfo)}` : label(col, curvesInfo),
         line: { color: COLORS[colorIdx % COLORS.length], dash },
-      })
+        xaxis: xRef(slot), yaxis: yRef(slot, placementOf(col).side),
+      } as Plotly.Data)
       colorIdx++
     }
     for (const idx of selectedDerived) {
@@ -395,16 +458,86 @@ function CurvesBuilder({ runs, jobsFile }: CurvesProps) {
       if (!dc) continue
       const vals = computeDerived(dc, data)
       if (vals) {
+        const key = `dc_${idx}`
+        const slot = slotOf(key)
         traces.push({
           type: 'scatter', mode: 'lines',
           x: data.time, y: vals,
           name: multiRun ? `${run.label} — ${dc.name}` : dc.name,
-          line: { color: COLORS[colorIdx % COLORS.length], dash: dashStyles[`dc_${idx}`] ?? 'solid' },
-        })
+          line: { color: COLORS[colorIdx % COLORS.length], dash: dashStyles[key] ?? 'solid' },
+          xaxis: xRef(slot), yaxis: yRef(slot, placementOf(key).side),
+        } as Plotly.Data)
         colorIdx++
       }
     }
   }
+
+  // Stacked subplots: each slot owns a vertical band with a left y axis, an
+  // optional right y axis overlaying it, and an x axis matched to the first one.
+  // Only the bottom subplot carries the time ticks and title.
+  const axes: AxisMap = {}
+  for (let slot = 0; slot < nPlots; slot++) {
+    const domain = slotDomain(slot, nPlots)
+    const bottom = slot === nPlots - 1
+    axes[xKey(slot)] = {
+      domain: [0, 1],
+      anchor: yRef(slot, 'left'),
+      showticklabels: bottom,
+      ...(bottom ? { title: { text: 'Time (s)' } } : {}),
+      ...(slot === 0 ? {} : { matches: 'x' }),
+    }
+    axes[yKey(slot, 'left')] = {
+      domain,
+      anchor: xRef(slot),
+      // A subplot may hold right-axis curves only — don't show an empty left scale.
+      visible: liveAxes.has(`${slot}:left`) || !liveAxes.has(`${slot}:right`),
+    }
+    if (liveAxes.has(`${slot}:right`)) {
+      axes[yKey(slot, 'right')] = {
+        domain,
+        anchor: xRef(slot),
+        overlaying: yRef(slot, 'left'),
+        side: 'right',
+      }
+    }
+  }
+  const chartHeight = nPlots === 1 ? 500 : Math.min(1400, 300 * nPlots)
+
+  // Options for the per-curve placement picker: every existing subplot (left or
+  // right axis) plus a slot for a brand-new subplot at the bottom.
+  const placementOptions = [
+    ...Array.from({ length: nPlots }, (_, slot) => [
+      { label: `Plot ${slot + 1} L`, value: `${slot}:left` },
+      { label: `Plot ${slot + 1} R`, value: `${slot}:right` },
+    ]).flat(),
+    { label: '+ New plot', value: `${nPlots}:left` },
+  ]
+
+  // Value shown by a curve's picker. A curve that is not currently plotted can
+  // still hold a subplot index no visible curve uses, so show the slot it would
+  // land on once enabled — or "+ New plot" if that would be a fresh subplot.
+  const placementValue = (key: string): string => {
+    const { plot, side } = placementOf(key)
+    const known = slotOfPlot.get(plot)
+    if (known !== undefined) return `${known}:${side}`
+    const wouldBe = [...new Set([...usedPlots, plot])].sort((a, b) => a - b).indexOf(plot)
+    return wouldBe >= nPlots ? `${nPlots}:left` : `${wouldBe}:${side}`
+  }
+  const setPlacement = (key: string, value: string) => {
+    const [plot, side] = value.split(':')
+    setPlacements(prev => ({ ...prev, [key]: { plot: Number(plot), side: side as AxisSide } }))
+  }
+
+  const placementSelect = (key: string) => (
+    <Select
+      size="small"
+      value={placementValue(key)}
+      options={placementOptions}
+      onChange={v => setPlacement(key, v)}
+      style={{ width: 96 }}
+      title="Plot and axis (L/R) this curve is drawn on"
+    />
+  )
 
   const addDerived = () => {
     if (!dcName.trim()) return
@@ -425,7 +558,7 @@ function CurvesBuilder({ runs, jobsFile }: CurvesProps) {
       <Divider>Curves</Divider>
       <div style={{ display: 'flex', gap: 0 }}>
         {/* Left panel */}
-        <div style={{ width: panelWidth, flexShrink: 0, minWidth: 180, maxWidth: 600 }}>
+        <div style={{ width: panelWidth, flexShrink: 0, minWidth: 220, maxWidth: 640 }}>
           <Text strong style={{ fontSize: 13 }}>Runs</Text>
           {okRuns.map(run => (
             <div key={run.run_id}>
@@ -445,37 +578,56 @@ function CurvesBuilder({ runs, jobsFile }: CurvesProps) {
           <Divider style={{ margin: '8px 0' }} />
           <Space style={{ width: '100%', justifyContent: 'space-between' }}>
             <Text strong style={{ fontSize: 13 }}>Signals</Text>
-            {selectedCols.size > 0 && (
-              <Button size="small" onClick={() => setSelectedCols(new Set())}>Clear</Button>
-            )}
+            <Space size={4}>
+              {nPlots > 1 || liveAxes.size > 1 ? (
+                <Button size="small" onClick={() => setPlacements({})} title="Draw every curve on a single plot, left axis">
+                  Merge plots
+                </Button>
+              ) : null}
+              {selectedCols.size > 0 && (
+                <Button size="small" onClick={() => setSelectedCols(new Set())}>Clear</Button>
+              )}
+            </Space>
           </Space>
 
           <Collapse
             size="small"
             style={{ marginTop: 4 }}
+            // Trim the default panel padding so long variable names get the width.
+            styles={{ body: { padding: '6px 8px' } }}
             activeKey={openModels}
             onChange={keys => setOpenModels(keys as string[])}
             items={Object.entries(byModel).map(([model, cols]) => ({
               key: model,
               label: <Text strong style={{ fontSize: 14 }}>{model}</Text>,
+              // The name gets a line to itself — variable names are long, and
+              // squeezing style pickers next to them shreds them over 3 lines.
+              // The pickers only appear once the signal is actually plotted.
               children: cols.map(col => (
-                <div key={col} style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 2 }}>
+                <div key={col} style={{ marginBottom: selectedCols.has(col) ? 6 : 2 }}>
                   <Checkbox
                     checked={selectedCols.has(col)}
+                    style={{ width: '100%' }}
                     onChange={e => setSelectedCols(prev => {
                       const s = new Set(prev); e.target.checked ? s.add(col) : s.delete(col); return s
                     })}
                   >
-                    <Text style={{ fontSize: 13 }}>{curvesInfo[col]?.[1] ?? col}</Text>
+                    <Text style={{ fontSize: 13, wordBreak: 'break-word' }} title={label(col, curvesInfo)}>
+                      {curvesInfo[col]?.[1] ?? col}
+                    </Text>
                   </Checkbox>
-                  <Select
-                    size="small"
-                    value={dashStyles[col] ?? 'solid'}
-                    options={DASH_OPTS.map(d => ({ label: d, value: d }))}
-                    onChange={v => setDashStyles(prev => ({ ...prev, [col]: v }))}
-                    style={{ width: 80, marginLeft: 'auto' }}
-                    disabled={!selectedCols.has(col)}
-                  />
+                  {selectedCols.has(col) && (
+                    <Space size={4} style={{ marginLeft: 24, marginTop: 2 }}>
+                      <Select
+                        size="small"
+                        value={dashStyles[col] ?? 'solid'}
+                        options={DASH_OPTS.map(d => ({ label: d, value: d }))}
+                        onChange={v => setDashStyles(prev => ({ ...prev, [col]: v }))}
+                        style={{ width: 84 }}
+                      />
+                      {placementSelect(col)}
+                    </Space>
+                  )}
                 </div>
               )),
             }))}
@@ -487,30 +639,38 @@ function CurvesBuilder({ runs, jobsFile }: CurvesProps) {
               <Divider style={{ margin: '8px 0' }} />
               <Text strong style={{ fontSize: 13 }}>Derived curves</Text>
               {derivedCurves.map((dc, i) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 2 }}>
-                  <Checkbox
-                    checked={selectedDerived.has(i)}
-                    onChange={e => setSelectedDerived(prev => {
-                      const s = new Set(prev); e.target.checked ? s.add(i) : s.delete(i); return s
-                    })}
-                  >
-                    <Text style={{ fontSize: 11 }}>{dc.name}</Text>
-                  </Checkbox>
-                  <Select
-                    size="small"
-                    value={dashStyles[`dc_${i}`] ?? 'solid'}
-                    options={DASH_OPTS.map(d => ({ label: d, value: d }))}
-                    onChange={v => setDashStyles(prev => ({ ...prev, [`dc_${i}`]: v }))}
-                    style={{ width: 80, marginLeft: 'auto' }}
-                    disabled={!selectedDerived.has(i)}
-                  />
-                  <Button
-                    size="small" type="text" danger icon={<DeleteOutlined />}
-                    onClick={() => {
-                      setDerivedCurves(prev => prev.filter((_, j) => j !== i))
-                      setSelectedDerived(prev => { const s = new Set(prev); s.delete(i); return s })
-                    }}
-                  />
+                <div key={i} style={{ marginBottom: selectedDerived.has(i) ? 6 : 2 }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4 }}>
+                    <Checkbox
+                      checked={selectedDerived.has(i)}
+                      style={{ minWidth: 0, flex: 1 }}
+                      onChange={e => setSelectedDerived(prev => {
+                        const s = new Set(prev); e.target.checked ? s.add(i) : s.delete(i); return s
+                      })}
+                    >
+                      <Text style={{ fontSize: 12, wordBreak: 'break-word' }} title={dc.name}>{dc.name}</Text>
+                    </Checkbox>
+                    <Button
+                      size="small" type="text" danger icon={<DeleteOutlined />}
+                      style={{ flexShrink: 0 }}
+                      onClick={() => {
+                        setDerivedCurves(prev => prev.filter((_, j) => j !== i))
+                        setSelectedDerived(prev => { const s = new Set(prev); s.delete(i); return s })
+                      }}
+                    />
+                  </div>
+                  {selectedDerived.has(i) && (
+                    <Space size={4} style={{ marginLeft: 24, marginTop: 2 }}>
+                      <Select
+                        size="small"
+                        value={dashStyles[`dc_${i}`] ?? 'solid'}
+                        options={DASH_OPTS.map(d => ({ label: d, value: d }))}
+                        onChange={v => setDashStyles(prev => ({ ...prev, [`dc_${i}`]: v }))}
+                        style={{ width: 84 }}
+                      />
+                      {placementSelect(`dc_${i}`)}
+                    </Space>
+                  )}
                 </div>
               ))}
             </>
@@ -577,7 +737,7 @@ function CurvesBuilder({ runs, jobsFile }: CurvesProps) {
         {/* Chart */}
         <div style={{ flex: 1, minWidth: 0 }}>
           {traces.length > 0 ? (
-            <PlotlyChart traces={traces} />
+            <PlotlyChart traces={traces} axes={axes} height={chartHeight} />
           ) : (
             <Alert type="info" description="Select at least one run and one signal on the left to display the chart." />
           )}
