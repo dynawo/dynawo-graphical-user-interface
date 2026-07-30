@@ -875,21 +875,54 @@ Appears when at least one successful run produced a \code{curves/curves.csv}
 file.
 
 \paragraph{Left panel.} Check runs and signals to include in the chart.
-Signals are grouped by model. Each signal has a line style selector
-(Solid, Dashed, Dotted, Dash-dot). The panel width can be adjusted by
-dragging the vertical divider between the panel and the chart; the width
-is remembered across page navigations.
+Signals are grouped by model. Checking a signal reveals two selectors indented
+beneath its name: a line style (Solid, Dashed, Dotted, Dash-dot) and a plot
+placement (below). Unchecked signals show only their name, so long variable
+names stay readable. The panel width can be adjusted by dragging the vertical
+divider between the panel and the chart; the width is remembered across page
+navigations.
+
+\paragraph{Plot placement.} By default every selected signal is drawn on the
+same plot, sharing one left-hand axis. The placement selector moves a signal
+elsewhere:
+
+\begin{description}[leftmargin=2em]
+  \item[\code{Plot \emph{n} L}] Left-hand axis of plot \emph{n} --- the default.
+  \item[\code{Plot \emph{n} R}] Right-hand axis of plot \emph{n}. Use this to
+    overlay quantities whose magnitudes differ widely (e.g.\ a voltage in p.u.\
+    against an active power in MW) without one flattening the other.
+  \item[\code{+ New plot}] Moves the signal onto a new plot stacked below the
+    existing ones. The new plot then appears in every placement selector as
+    \code{Plot \emph{n} L} / \code{Plot \emph{n} R}, so other signals can join
+    it.
+\end{description}
+
+Stacked plots share the time axis: zooming or panning one applies the same time
+window to all of them, and only the bottom plot carries the \code{Time (s)}
+ticks and label. A plot disappears as soon as no visible curve uses it, and the
+remaining plots close the gap. The \textbf{Merge plots} button --- next to
+\textbf{Clear} in the \emph{Signals} header, shown only once more than one plot
+or axis is in use --- resets every curve back to a single plot on the left axis.
+
+\begin{notebox}
+Placements apply per signal, not per run. When several runs are checked, a
+signal is drawn once per run, all on the plot and axis chosen for that signal.
+That is what keeps run-to-run comparison meaningful.
+\end{notebox}
 
 \paragraph{Derived curves.} Compute new signals from existing ones: Scale
-(multiply by a factor), Sum, or Difference.
+(multiply by a factor), Sum, or Difference. Derived curves carry the same line
+style and plot placement selectors as ordinary signals.
 
 \begin{notebox}
 \textbf{Selections are preserved across navigation.} Checked curves, open
-model groups, and derived curves are restored automatically when you return to
-this page.
+model groups, derived curves, line styles, and plot placements are restored
+automatically when you return to this page.
 \end{notebox}
 
-\paragraph{Right panel.} Interactive Plotly chart with unified x-hover.
+\paragraph{Right panel.} Interactive Plotly chart with unified x-hover: the
+hover label lists every trace of the plot under the cursor at that time step.
+The chart grows taller as plots are added.
 
 % ═════════════════════════════════════════════════════════════════════════════
 \section{Typical workflow}
@@ -963,7 +996,11 @@ summary (idle time, files, network loaded, simulation running).
 \begin{description}[leftmargin=2em]
   \item[SLD / NAD zoom reset] Double-click anywhere on the diagram.
   \item[Hover tooltip] Move the cursor horizontally over the chart to read all
-    traces at the same time step.
+    traces at the same time step. With stacked plots the label covers the
+    traces of the plot under the cursor.
+  \item[Mixed magnitudes] Rather than letting one curve flatten another, send
+    it to the right-hand axis (\code{Plot 1 R}) or to its own stacked plot
+    (\code{+ New plot}) --- see Section~\ref{sec:curves}.
   \item[Plotly toolbar] Hover the chart to reveal download, zoom, pan, and
     autoscale controls (top-right corner).
   \item[Run labels] Rename runs immediately after each simulation for a
@@ -1009,6 +1046,10 @@ summary (idle time, files, network loaded, simulation running).
     Runs that pre-date the creation of the \ftype{crv} file will not show
     curves; only runs started after applying a curve selection will produce
     output.
+  \item[A checked signal is missing from the chart] It may sit on another
+    stacked plot or on a right-hand axis. Check its placement selector, or
+    click \textbf{Merge plots} to bring every curve back onto a single plot
+    (Section~\ref{sec:curves}).
   \item[Parameter changes not reflected in simulation] Confirm you clicked
     \textbf{Apply}. The change log shows committed edits.
   \item[Session expired] Sessions expire after \code{SESSION\_TTL} seconds of
