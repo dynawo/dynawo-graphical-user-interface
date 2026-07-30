@@ -173,6 +173,49 @@ info "Setting up the frontend (Node)"
 ( cd "$FRONTEND_DIR" && npm install )
 ok "Frontend dependencies installed"
 
+# --- git hooks ---------------------------------------------------------------
+# Install the commit-msg hook that prefixes commit messages with the ticket
+# number from the branch name (see util/hooks/commit_hook.sh). Skipped when
+# there is no .git — e.g. when the sources were downloaded as an archive.
+#
+# Never fatal: a missing hook must not break a development install.
+
+install_commit_hook() {
+    local git_dir hook shim
+    git_dir="$(git -C "$ROOT" rev-parse --git-dir 2>/dev/null)" || return 1
+    hook="$git_dir/hooks/commit-msg"
+
+    # Resolve the script through the worktree root rather than baking in an
+    # absolute path, so the hook survives the repo being moved or renamed.
+    shim='#!/bin/bash
+exec "$(git rev-parse --show-toplevel)/util/hooks/commit_hook.sh" "$1"'
+
+    if [ ! -f "$hook" ] || [ "$shim" != "$(cat "$hook")" ]; then
+        printf '%s\n' "$shim" > "$hook" || return 1
+    fi
+    [ -x "$hook" ] || chmod +x "$hook" || return 1
+    chmod +x "$ROOT/util/hooks/commit_hook.sh" 2>/dev/null || true
+
+    # git treats '#' as the comment character and would strip the '#<number> '
+    # prefix from messages written in an editor. Move comments to '%'.
+    local cc
+    cc="$(git -C "$ROOT" config --get core.commentchar 2>/dev/null || true)"
+    if [ -z "$cc" ] || [ "$cc" = "#" ]; then
+        git -C "$ROOT" config core.commentchar % || return 1
+    fi
+}
+
+info "Installing git hooks"
+if ! command -v git >/dev/null 2>&1; then
+    warn "git not found — skipping commit-msg hook installation."
+elif ! git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+    warn "Not a git repository — skipping commit-msg hook installation."
+elif install_commit_hook; then
+    ok "commit-msg hook installed (branches must be named '<number>_<name>')"
+else
+    warn "Could not install the commit-msg hook — continuing anyway."
+fi
+
 # --- done --------------------------------------------------------------------
 
 echo
