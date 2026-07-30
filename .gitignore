@@ -17,6 +17,9 @@ docs/*.toc
 docs/*.synctex.gz
 docs/*.pdf
 
+# Docker — local overrides, may contain proxy credentials
+.env
+
 # OS
 .DS_Store
 Thumbs.db

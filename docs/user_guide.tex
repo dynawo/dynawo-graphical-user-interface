@@ -124,6 +124,8 @@ inactivity.
 
 \subsection{Prerequisites}
 
+For a native installation on Linux or macOS:
+
 \begin{itemize}[leftmargin=2em]
   \item Python\,3.10 or later
   \item Node.js\,18 or later (for development only --- not required to run a
@@ -131,6 +133,11 @@ inactivity.
   \item A working Dynawo installation, \emph{or} use the built-in download
     feature on the \textbf{Dynawo Version} page (Section~\ref{sec:dynawoversion})
 \end{itemize}
+
+For the Docker installation (Section~\ref{sec:dockerquickstart}) none of the
+above is required: Python, Node, Dynawo and DynaFlow Launcher are all contained
+in the image, and Docker is the only thing to install. This is the recommended
+route on Windows, where Dynawo's Linux binaries cannot run directly.
 
 \subsection{Quick start (Linux/macOS)}
 \label{sec:quickstart}
@@ -169,7 +176,46 @@ downloaded Dynawo versions under
 \end{notebox}
 
 The manual steps in the following subsections remain available if you prefer to
-run each command yourself, and are also the basis for running on Windows.
+run each command yourself.
+
+\subsection{Quick start (Windows and any OS, via Docker)}
+\label{sec:dockerquickstart}
+
+Dynawo's binaries are built for Linux, so on Windows the application runs inside
+a Linux container. Everything it needs --- Python, Node, Dynawo and DynaFlow
+Launcher --- is contained in the image, so Docker is the only prerequisite.
+
+\begin{enumerate}[leftmargin=2em]
+  \item Install Docker Desktop, keeping the WSL2 backend enabled (the default
+    on Windows), and start it. If Docker Desktop is not available to you,
+    Rancher Desktop runs this setup unchanged.
+  \item Double-click \code{start-dynawo-gui.bat} in the repository folder.
+  \item When the launcher reports that the application is running, open
+    \code{http://localhost:8080}.
+\end{enumerate}
+
+Stop it again by double-clicking \code{stop-dynawo-gui.bat}. On Linux and macOS
+the equivalents are \code{docker/start.sh} and \code{docker/stop.sh}, or simply:
+
+\begin{lstlisting}[language=bash]
+docker compose up -d --build     # then open http://localhost:8080
+docker compose down              # stop
+\end{lstlisting}
+
+The first run builds the images and takes 10--25 minutes; later runs take
+seconds. The launcher checks that Docker is installed and actually running,
+builds only when needed, waits until the application answers, and opens the
+browser on it. Set \code{GUI\_PORT} to serve on a port other than 8080.
+
+\begin{notebox}
+No Dynawo download is needed in this mode. Every Linux release listed in
+\code{resources/dynawo\_versions.json} and
+\code{resources/dynaflow\_versions.json} is already inside the image, so the
+\textbf{Dynawo Version} and \textbf{DynaFlow Launcher} pages show them as
+available immediately and the application works without internet access.
+Simulation results and settings are kept in a Docker volume and survive
+restarts.
+\end{notebox}
 
 \subsection{Installing dependencies}
 
@@ -218,15 +264,10 @@ uvicorn api.main:app --host 0.0.0.0 --port 8000
 
 Open \code{http://localhost:8000} in your browser.
 
-\subsubsection{Docker (recommended for external users)}
+\subsubsection{Docker}
 
-\begin{lstlisting}[language=bash]
-docker pull ghcr.io/rte/dynawo-ihm:latest
-docker run -p 80:80 ghcr.io/rte/dynawo-ihm
-\end{lstlisting}
-
-Open \code{http://localhost} in your browser. No Python or Node installation
-required.
+See Section~\ref{sec:dockerquickstart}. This is the recommended route for users
+who do not develop the application, and the only supported one on Windows.
 
 % ═════════════════════════════════════════════════════════════════════════════
 \section{Session management}
@@ -310,6 +351,14 @@ Select the target OS (auto-detected) and version, then click \textbf{Download}.
 A live progress bar streams download progress via Server-Sent Events --- the
 rest of the interface remains usable. Once extraction is complete a
 \textbf{Use this version} button activates it immediately.
+
+\begin{notebox}
+Running under Docker (Section~\ref{sec:dockerquickstart}), every Linux version
+is already installed and listed as available, so no download is needed --- just
+click \textbf{Use}. Downloading remains available for a build that is not
+included. Versions that ship with the image cannot be removed:
+\textbf{Remove} reports that they are part of the application.
+\end{notebox}
 
 % ═════════════════════════════════════════════════════════════════════════════
 \section{Page 2 --- Upload Files}
@@ -588,6 +637,13 @@ the Dynawo executable:
 
 Switching the active version restarts the internal pypowsybl worker pool so the
 new binary takes effect immediately --- no server restart required.
+
+\begin{notebox}
+As with Dynawo itself, running under Docker
+(Section~\ref{sec:dockerquickstart}) means the DynaFlow Launcher versions ship
+inside the image and are listed as available with no download step. Those
+versions cannot be removed.
+\end{notebox}
 
 \subsubsection{Starting Point Mode}
 \label{sec:startingpoint}

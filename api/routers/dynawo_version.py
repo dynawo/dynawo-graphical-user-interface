@@ -146,6 +146,14 @@ def remove_version(os_key: str, version: str, session: UserSession = Depends(get
     d = _version_dir(os_key, version)
     if not os.path.isdir(d):
         raise HTTPException(status_code=404, detail="Version not found on disk")
+    # Versions baked into the Docker image are published here as symlinks by
+    # docker-entrypoint.sh. rmtree refuses to act on a symlink, and deleting
+    # the link would be pointless anyway since the next start recreates it.
+    if os.path.islink(d):
+        raise HTTPException(
+            status_code=400,
+            detail="This version ships with the application and cannot be removed",
+        )
     shutil.rmtree(d)
     if session.dynawo_executable and session.dynawo_executable.startswith(d):
         session.dynawo_executable = None

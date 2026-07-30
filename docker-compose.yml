@@ -1,0 +1,83 @@
+# Copyright (c) 2026, RTE (http://www.rte-france.com)
+# See AUTHORS.txt
+# All rights reserved.
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, you can obtain one at http://mozilla.org/MPL/2.0/.
+# SPDX-License-Identifier: MPL-2.0
+#
+# Two containers behind a single origin: nginx serves the React bundle and
+# proxies /api/* to the FastAPI backend. Only the web service publishes a port.
+#
+#   docker compose up --build     then open http://localhost:8080
+#
+# See docs/running_on_windows.md.
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+      # Behind a corporate proxy, apt and pip inside the *build* container need
+      # it too — a proxy configured on the Docker daemon covers only the
+      # daemon's own image pulls, not builds. These are Docker's predefined
+      # proxy build args, so no ARG line is needed in the Dockerfile and the
+      # values stay out of the image metadata. Empty when the host has no
+      # proxy set, which apt and pip both ignore.
+      args:
+        http_proxy: ${HTTP_PROXY:-}
+        https_proxy: ${HTTPS_PROXY:-}
+        no_proxy: ${NO_PROXY:-}
+    environment:
+      # See README "Environment variables" for the full list. Override any of
+      # these without editing this file by putting them in a .env file next to
+      # it, or by exporting them before `docker compose up`.
+      SESSION_TTL: ${SESSION_TTL:-3600}
+      MAX_CONCURRENT_SIMS: ${MAX_CONCURRENT_SIMS:-4}
+      # The app downloads Dynawo from GitHub at run time, so behind a corporate
+      # proxy the *running* container needs one too — separately from the build
+      # args above. Inherited from the host shell, so there is nothing to edit
+      # here: if your terminal can reach the internet, so can the container.
+      # Unset on the host means empty, which Python's urllib ignores.
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-}
+    volumes:
+      # Persist downloaded Dynawo versions + user config across restarts.
+      # Removing this volume (docker compose down -v) means downloading Dynawo
+      # again on next start.
+      - dynawo-data:/data
+    expose:
+      - "8000"
+    healthcheck:
+      # Uses the venv's python rather than curl, which the image deliberately
+      # does not ship. /api/dynawo/versions is unauthenticated and only reads
+      # resources/dynawo_versions.json, so it answers as soon as the app is up.
+      test: ["CMD", "python3", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/dynawo/versions', timeout=5)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+      # npm install needs the proxy for the same reason as above.
+      args:
+        http_proxy: ${HTTP_PROXY:-}
+        https_proxy: ${HTTPS_PROXY:-}
+        no_proxy: ${NO_PROXY:-}
+    ports:
+      # Change the host port with GUI_PORT=9090 docker compose up, or a .env
+      # file — useful when something else already owns 8080.
+      - "${GUI_PORT:-8080}:80"
+    depends_on:
+      backend:
+        # Without this nginx accepts connections before uvicorn is listening,
+        # and the first page load answers 502.
+        condition: service_healthy
+
+volumes:
+  dynawo-data:

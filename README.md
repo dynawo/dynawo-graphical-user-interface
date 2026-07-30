@@ -38,6 +38,40 @@ Prefer to run the steps yourself? See the manual instructions below.
 
 ---
 
+## Quick start (Windows, via Docker)
+
+Dynawo's binaries are Linux-first, so on Windows the application runs inside a
+Linux container. Everything it needs — Python, Node, Dynawo and DynaFlow
+Launcher — is in the image, so **Docker is the only thing to install**.
+
+1. Install [Docker Desktop](https://www.docker.com/products/docker-desktop/),
+   keeping the WSL2 backend enabled (the default), and start it.
+2. Double-click **`start-dynawo-gui.bat`** in this folder.
+3. When it says the application is running, open <http://localhost:8080>.
+
+The first run builds the images and takes 10–25 minutes; later runs take
+seconds. Double-click **`stop-dynawo-gui.bat`** to stop — your simulation data
+is kept in a Docker volume and survives restarts.
+
+The launcher checks that Docker is installed and actually running, builds only
+when needed, waits until the application answers, and opens your browser on it.
+If something is missing it prints exactly what to do.
+
+No Dynawo download is needed: every Linux release listed in
+[`resources/dynawo_versions.json`](resources/dynawo_versions.json) and
+[`resources/dynaflow_versions.json`](resources/dynaflow_versions.json) is
+already inside the image, so the app also works without internet access.
+
+On Linux or macOS the same setup runs via
+[`docker/start.sh`](docker/start.sh) and [`docker/stop.sh`](docker/stop.sh),
+or directly with `docker compose up -d --build`. Use `GUI_PORT=9090` to serve
+on a different port.
+
+If Docker Desktop is not available to you,
+[Rancher Desktop](https://rancherdesktop.io/) runs this setup unchanged.
+
+---
+
 ## Project structure
 
 ```

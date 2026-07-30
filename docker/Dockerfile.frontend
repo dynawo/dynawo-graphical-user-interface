@@ -1,0 +1,48 @@
+# Copyright (c) 2026, RTE (http://www.rte-france.com)
+# See AUTHORS.txt
+# All rights reserved.
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, you can obtain one at http://mozilla.org/MPL/2.0/.
+# SPDX-License-Identifier: MPL-2.0
+#
+# Frontend: build the React app, then serve the static bundle with nginx.
+#
+# Unlike the backend, the base images here are not constrained by Dynawo: no
+# Dynawo binary ever runs in this container. The build stage only emits
+# JS/CSS/HTML and the serve stage only hands those files out, so the official
+# Node and nginx images are used as-is. (Ubuntu 22.04 would need a NodeSource
+# repo anyway — jammy ships Node 12, well below the Node >= 18 this project
+# requires.)
+#
+# The multi-stage split is what keeps this image small: frontend/node_modules
+# is ~500 MB and dies with the build stage.
+#
+# See docs/running_on_windows.md for the full setup this file belongs to.
+
+
+# ─── build stage ──────────────────────────────────────────────────────────────
+
+FROM node:20-slim AS build
+
+WORKDIR /app
+
+# Manifests before sources, so editing frontend/src does not re-run npm install.
+COPY frontend/package.json frontend/package-lock.json* ./
+
+# Use npm install, NOT npm ci: npm ci skips optional native dependencies, which
+# breaks the rolldown/Vite build (see README "Clean install" and install.sh).
+RUN npm install
+
+COPY frontend/ ./
+RUN npm run build
+
+
+# ─── serve stage ──────────────────────────────────────────────────────────────
+
+FROM nginx:alpine
+
+COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=build /app/dist /usr/share/nginx/html
+
+EXPOSE 80
