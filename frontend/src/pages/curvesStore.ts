@@ -10,6 +10,12 @@
 
 export type DashStyle = 'solid' | 'dash' | 'dot' | 'dashdot'
 
+// Where a curve is drawn: which stacked subplot, and which vertical axis of it.
+// `plot` is a 0-based index; unused indices are compacted away at render time so
+// the subplots the user sees are always consecutive.
+export type AxisSide = 'left' | 'right'
+export interface Placement { plot: number; side: AxisSide }
+
 export interface DerivedCurve {
   name: string
   op: 'sum' | 'diff' | 'scale'
@@ -29,6 +35,7 @@ interface Saved {
   selectedRuns:   number[]
   selectedCols:   string[]
   dashStyles:     Record<string, DashStyle>
+  placements?:    Record<string, Placement>
   derivedCurves:  DerivedCurve[]
   selectedDerived: number[]
   openModels:     string[]
