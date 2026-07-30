@@ -8,7 +8,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //
 
-import { useRef, useState } from 'react'
+import { useState } from 'react'
 import { Alert, Button, Modal, Space, Typography, Upload as AntUpload } from 'antd'
 import { FileZipOutlined, InboxOutlined, PlayCircleOutlined } from '@ant-design/icons'
 import client from '../api/client'

@@ -1,0 +1,21 @@
+# Git for Windows checks out text files with CRLF by default. A shell script
+# with CRLF endings fails inside a Linux container with a misleading error —
+# the kernel reads "#!/bin/sh\r" and reports "no such file or directory" for an
+# interpreter that plainly exists. Force LF for everything that runs in a
+# container or on a POSIX shell, regardless of the developer's platform.
+*.sh            text eol=lf
+
+# The exact inverse for batch files: cmd.exe can misparse a .bat with LF-only
+# endings, particularly around labels and goto.
+*.bat           text eol=crlf
+*.cmd           text eol=crlf
+Dockerfile*     text eol=lf
+docker-compose*.yml text eol=lf
+nginx.conf      text eol=lf
+.dockerignore   text eol=lf
+.env.example    text eol=lf
+
+# Never let Git rewrite bytes inside these.
+*.png           binary
+*.zip           binary
+*.pdf           binary

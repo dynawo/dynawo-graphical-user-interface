@@ -1,0 +1,30 @@
+# Python
+**/__pycache__/
+**/*.py[cod]
+*.egg-info/
+.venv/
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Local overrides — may hold proxy credentials, never belongs in an image
+.env
+
+# VCS and editor state
+.git/
+.gitignore
+.vscode/
+.idea/
+
+# Not needed at run time
+docs/
+README.md
+AUTHORS.txt
+LICENSE
+install.sh
+run.sh
+
+# OS
+.DS_Store
+Thumbs.db

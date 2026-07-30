@@ -1,0 +1,159 @@
+# Copyright (c) 2026, RTE (http://www.rte-france.com)
+# See AUTHORS.txt
+# All rights reserved.
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, you can obtain one at http://mozilla.org/MPL/2.0/.
+# SPDX-License-Identifier: MPL-2.0
+#
+# Backend: FastAPI + Dynawo, on Ubuntu 22.04 LTS (jammy).
+#
+# The base image is deliberately Ubuntu 22.04 — the reference environment
+# Dynawo is developed and validated on. The Dynawo releases this app downloads
+# at run time are *prebuilt binaries* dynamically linked against the system
+# glibc and libstdc++; running them on a different libc (Debian, Alpine/musl,
+# ...) is the usual source of "cannot open shared object file" and
+# symbol-version failures. Matching the distribution removes that whole class
+# of problem, and rules out slimmer bases: size optimization stops at the libc
+# boundary. pypowsybl likewise ships manylinux wheels only, not musl ones.
+#
+# Jammy also ships Python 3.10 as the system python3 — exactly the minimum this
+# project requires (see README "Prerequisites"), so no PPA is needed.
+#
+# See docs/running_on_windows.md for the full setup this file belongs to.
+
+
+# ─── build stage ──────────────────────────────────────────────────────────────
+# Resolves the Python dependencies into /opt/venv. Everything only needed to
+# *install* (pip, the apt package lists, the ensurepip wheels) stays here and
+# never reaches the shipped image.
+
+FROM ubuntu:22.04 AS build
+
+# Without this, apt stops on tzdata's interactive prompt mid-build.
+ENV DEBIAN_FRONTEND=noninteractive
+
+# python3-venv brings ensurepip's bundled wheels, so `python3 -m venv` gets a
+# working pip inside the venv — the python3-pip apt package is not needed.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 \
+        python3-venv \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# A venv (rather than Ubuntu's system site-packages) mirrors the local .venv
+# layout from install.sh and keeps pip clear of apt-managed Python packages.
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Dependencies before app code, so editing api/ or backend/ does not re-run
+# this ~500 MB install.
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt
+
+# Drop what never runs in production. pandas/tests alone is ~29 MB and numpy's
+# suites another ~10 MB. Removed by explicit path: pandas.testing and
+# pandas._testing are public API and must survive, so a blanket
+# `find -name tests -delete` would be wrong. pip is gone too — the venv is
+# finished — but setuptools stays, because passlib.pwd imports pkg_resources.
+RUN rm -rf /opt/venv/lib/python3.10/site-packages/pandas/tests \
+    && find /opt/venv/lib/python3.10/site-packages/numpy -type d -name tests \
+        -prune -exec rm -rf {} + \
+    && pip uninstall -y pip
+
+
+# ─── releases stage ───────────────────────────────────────────────────────────
+# Pre-fetches every Linux release listed in resources/dynawo_versions.json and
+# resources/dynaflow_versions.json, so the shipped image needs no download on
+# first run: no wait for the user, no dependency on GitHub being reachable, and
+# one less proxy layer to configure.
+#
+# curl, unzip and the archives themselves stay in this throwaway stage — only
+# the extracted trees are copied into the runtime image.
+#
+# These layers are keyed on the two JSON files, so they re-download only when
+# the version lists actually change.
+
+FROM ubuntu:22.04 AS releases
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        unzip \
+        python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY docker/docker-prefetch-releases.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-prefetch-releases.sh
+
+# Separate COPY/RUN pairs so adding a Dynawo version does not invalidate the
+# DynaFlow download, and vice versa.
+COPY resources/dynawo_versions.json /tmp/dynawo_versions.json
+RUN docker-prefetch-releases.sh /tmp/dynawo_versions.json /opt/dynawo-preinstalled
+
+COPY resources/dynaflow_versions.json /tmp/dynaflow_versions.json
+RUN docker-prefetch-releases.sh /tmp/dynaflow_versions.json /opt/dynaflow-preinstalled
+
+
+# ─── runtime stage ────────────────────────────────────────────────────────────
+
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# python3 is still required even though the venv is copied whole: a venv holds
+# no stdlib of its own, it borrows /usr/lib/python3.10 from the base install.
+# Both stages share this base image, so the interpreter is bit-identical and
+# the venv's symlinks resolve.
+#
+# libgomp1 / libgfortran5 / libatomic1 are for the Dynawo binaries, not for
+# this app. curl and unzip are deliberately absent: backend/download_manager.py
+# fetches with urllib.request and extracts with zipfile, both stdlib.
+# ca-certificates is required — those downloads are HTTPS.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 \
+        libgomp1 \
+        libgfortran5 \
+        libatomic1 \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# The prefetched Dynawo and DynaFlow Launcher releases. They live outside $HOME
+# on purpose: /data is a named volume, and Docker seeds a volume from the image
+# only when it is first created — anything baked under /data would never reach a
+# volume that already exists, so image updates would silently not apply. The
+# entrypoint links these into place instead, on every start.
+COPY --from=releases /opt/dynawo-preinstalled   /opt/dynawo-preinstalled
+COPY --from=releases /opt/dynaflow-preinstalled /opt/dynaflow-preinstalled
+
+# Simulation logs are streamed to the browser line by line (nginx sets
+# proxy_buffering off for the same reason). Python's default block buffering
+# on a non-tty would hold them back until the run finished.
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+COPY api/       ./api/
+COPY backend/   ./backend/
+COPY resources/ ./resources/
+
+# Downloaded Dynawo versions and per-user config live under $HOME; the
+# dynawo-data volume is mounted here so they survive container restarts
+# (see docker-compose.yml).
+ENV HOME=/data
+RUN mkdir -p /data
+
+# Links the preinstalled Dynawo releases into $HOME on every start, then execs
+# the CMD below.
+COPY docker/docker-entrypoint.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+
+EXPOSE 8000
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
