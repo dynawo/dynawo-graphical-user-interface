@@ -64,6 +64,10 @@ const editCurvesCache: EditCurvesCache = {
   dydModels: {},
 }
 
+export function invalidateEditCurvesCache() {
+  editCurvesCache.loaded = false
+}
+
 // ── Virtualized model list ──────────────────────────────────────────────────
 // A big network's DYD can have one blackBoxModel per static id (tens of thousands).
 // Rendering every model as an always-mounted Collapse.Panel makes the page slow to

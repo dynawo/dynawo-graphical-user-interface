@@ -16,6 +16,7 @@ import {
 import client from '../api/client'
 import AutoloadFilesystemModal from './AutoloadFilesystemModal'
 import AutoloadZipModal from './AutoloadZipModal'
+import { invalidateEditCurvesCache } from './EditCurves'
 
 const { Dragger } = AntUpload
 const { Title } = Typography
@@ -178,6 +179,7 @@ export default function Upload() {
   const handleUnload = async (name: string) => {
     await client.delete(`/files/${encodeURIComponent(name)}`)
     if (network?.filename === name) setNetwork(null)
+    if (files.find(f => f.name === name)?.ftype === 'crv') invalidateEditCurvesCache()
     await fetchFiles()
   }
 
@@ -185,6 +187,7 @@ export default function Upload() {
     const names = collectFileKeys(node)
     await Promise.all(names.map(name => client.delete(`/files/${encodeURIComponent(name)}`)))
     if (network && names.includes(network.filename)) setNetwork(null)
+    if (files.some(f => names.includes(f.name) && f.ftype === 'crv')) invalidateEditCurvesCache()
     await fetchFiles()
   }
 
