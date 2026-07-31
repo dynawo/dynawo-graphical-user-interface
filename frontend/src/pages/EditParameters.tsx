@@ -82,9 +82,6 @@ export default function EditParameters() {
 
   const fetchDetail = async (sid: string) => {
     try {
-      // sid comes straight from the .dyd staticId and may contain spaces —
-      // interpolating it raw makes the URL parser drop a trailing one, so the
-      // backend sees a different (unknown) sid and answers 404.
       const res = await client.get<ModelDetail>(`/parameters/model/${encodeURIComponent(sid)}`)
       setDetail(res.data)
       const initial: Record<string, string> = {}
