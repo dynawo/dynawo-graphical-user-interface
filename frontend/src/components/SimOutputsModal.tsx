@@ -9,9 +9,75 @@
 //
 
 import { useMemo, useState } from 'react'
-import { Modal, Tabs, Table, Spin, Empty, Typography, Input, Space } from 'antd'
+import { Modal, Tabs, Table, Spin, Empty, Typography, Input, Space, Button, Checkbox } from 'antd'
+import type { TableColumnType } from 'antd'
+import type { FilterDropdownProps } from 'antd/es/table/interface'
+import { SearchOutlined, CloseOutlined } from '@ant-design/icons'
 
 const { Text } = Typography
+
+function getPrefixSearchColumnProps<T extends object>(
+  dataIndex: keyof T,
+): Partial<TableColumnType<T>> {
+  return {
+    filterDropdown: ({ setSelectedKeys, selectedKeys, confirm }: FilterDropdownProps) => (
+      <div style={{ padding: 8 }} onKeyDown={e => e.stopPropagation()}>
+        <Space.Compact style={{ width: 200 }}>
+          <Input
+            placeholder="Contains…"
+            value={selectedKeys[0]}
+            onChange={e => {
+              const next = e.target.value
+              setSelectedKeys(next ? [next] : [])
+              confirm({ closeDropdown: false })
+            }}
+            autoFocus
+          />
+          <Button
+            icon={<CloseOutlined />}
+            disabled={!selectedKeys[0]}
+            onClick={() => {
+              setSelectedKeys([])
+              confirm({ closeDropdown: false })
+            }}
+          />
+        </Space.Compact>
+      </div>
+    ),
+    filterIcon: (filtered: boolean) => <SearchOutlined style={{ color: filtered ? '#1677ff' : undefined }} />,
+    onFilter: (value, record) => {
+      const cell = record[dataIndex]
+      return typeof cell === 'string'
+        ? cell.toLowerCase().includes(String(value).toLowerCase())
+        : false
+    },
+  }
+}
+
+function getEnumFilterColumnProps<T extends object>(
+  data: T[],
+  dataIndex: keyof T,
+): Partial<TableColumnType<T>> {
+  const raw = data.map(row => row[dataIndex]) as unknown[]
+  const values = Array.from(new Set(raw.filter((v): v is string => typeof v === 'string'))).sort()
+
+  return {
+    filterDropdown: ({ setSelectedKeys, selectedKeys, confirm }: FilterDropdownProps) => (
+      <div style={{ padding: 8 }}>
+        <Checkbox.Group
+          style={{ display: 'flex', flexDirection: 'column', gap: 4 }}
+          value={selectedKeys as string[]}
+          onChange={checked => {
+            setSelectedKeys(checked as string[])
+            confirm({ closeDropdown: false })
+          }}
+          options={values.map(v => ({ label: v, value: v }))}
+        />
+      </div>
+    ),
+    onFilter: (value, record) => String(record[dataIndex]) === String(value),
+  }
+}
 
 const LOG_LEVEL_COLORS: Record<string, string> = {
   ERROR: '#ff6b6b',
@@ -165,6 +231,8 @@ export default function SimOutputsModal({
       dataIndex: c.key,
       key: c.key,
       render: (v: unknown) => v === undefined || v === null ? <Text type="secondary">—</Text> : String(v),
+      ...(c.key === 'model_name' ? getPrefixSearchColumnProps<ConstraintItem>(c.key) : {}),
+      ...(c.key === 'type' || c.key === 'kind' ? getEnumFilterColumnProps(constraints.data ?? [], c.key) : {}),
     }))
 
   return (
@@ -192,8 +260,8 @@ export default function SimOutputsModal({
                       pagination={{ pageSize: 20 }}
                       columns={[
                         { title: 'Time (s)', dataIndex: 'time', key: 'time', width: 100, sorter: (a, b) => a.time - b.time, defaultSortOrder: 'ascend' },
-                        { title: 'Model', dataIndex: 'model_name', key: 'model_name' },
-                        { title: 'Message', dataIndex: 'message', key: 'message' },
+                        { title: 'Model', dataIndex: 'model_name', key: 'model_name', ...getPrefixSearchColumnProps<TimelineEvent>('model_name') },
+                        { title: 'Message', dataIndex: 'message', key: 'message', ...getPrefixSearchColumnProps<TimelineEvent>('message') },
                       ]}
                     />
                   ),
