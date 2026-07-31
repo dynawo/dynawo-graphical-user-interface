@@ -296,7 +296,8 @@ function DynModelPanel({ sid, model, onClose, onApplied }: PanelProps) {
   const handleApply = async () => {
     setSaving(true); setError(null); setSuccess(null)
     try {
-      const res = await client.put<{ changed: number }>(`/parameters/model/${sid}`, { values: formVals })
+      const res = await client.put<{ changed: number }>(
+        `/parameters/model/${encodeURIComponent(sid)}`, { values: formVals })
       setSuccess(`${res.data.changed} parameter(s) updated.`)
       onApplied()
     } catch (e: any) {
