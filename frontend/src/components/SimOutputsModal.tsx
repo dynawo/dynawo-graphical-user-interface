@@ -230,7 +230,11 @@ export default function SimOutputsModal({
       title: c.title,
       dataIndex: c.key,
       key: c.key,
-      render: (v: unknown) => v === undefined || v === null ? <Text type="secondary">—</Text> : String(v),
+      render: (v: unknown) => {
+        if (v === undefined || v === null) return <Text type="secondary">—</Text>
+        if (c.key === 'value' && typeof v === 'number') return v.toFixed(2)
+        return String(v)
+      },
       ...(c.key === 'model_name' ? getPrefixSearchColumnProps<ConstraintItem>(c.key) : {}),
       ...(c.key === 'type' || c.key === 'kind' ? getEnumFilterColumnProps(constraints.data ?? [], c.key) : {}),
     }))
