@@ -81,11 +81,20 @@ export default function EditParameters() {
   }
 
   const fetchDetail = async (sid: string) => {
-    const res = await client.get<ModelDetail>(`/parameters/model/${sid}`)
-    setDetail(res.data)
-    const initial: Record<string, string> = {}
-    for (const p of res.data.pars) initial[p.name] = p.value
-    setFormVals(initial)
+    try {
+      // sid comes straight from the .dyd staticId and may contain spaces —
+      // interpolating it raw makes the URL parser drop a trailing one, so the
+      // backend sees a different (unknown) sid and answers 404.
+      const res = await client.get<ModelDetail>(`/parameters/model/${encodeURIComponent(sid)}`)
+      setDetail(res.data)
+      const initial: Record<string, string> = {}
+      for (const p of res.data.pars) initial[p.name] = p.value
+      setFormVals(initial)
+    } catch (err: any) {
+      setDetail(null)
+      setFormVals({})
+      setError(err.response?.data?.detail ?? `Could not load parameters for ${sid}`)
+    }
   }
 
   useEffect(() => { fetchModels(); fetchChangelog(); fetchModified() }, [])
@@ -101,7 +110,8 @@ export default function EditParameters() {
     setError(null)
     setSuccess(null)
     try {
-      const res = await client.put<{ changed: number }>(`/parameters/model/${selectedSid}`, { values: formVals })
+      const res = await client.put<{ changed: number }>(
+        `/parameters/model/${encodeURIComponent(selectedSid)}`, { values: formVals })
       await fetchDetail(selectedSid)
       await fetchChangelog()
       await fetchModified()
