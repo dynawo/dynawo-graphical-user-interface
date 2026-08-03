@@ -22,6 +22,7 @@ from api.concurrency import pypowsybl_slot
 from api.dependencies import get_session
 from api.session_store import UserSession
 from backend import loadflow_runner
+from backend.jobs_parser import write_crv_reference_to_jobs
 from backend.powsybl_config import bootstrap_new_worker
 
 router = APIRouter(tags=["loadflow"])
@@ -128,6 +129,27 @@ class LfRunRequest(BaseModel):
     input_filename: str | None = None
 
 
+def _reapply_crv_reference(session: UserSession, debug_files: list[str]) -> None:
+    """Re-link the session's .crv file into freshly (re)generated .jobs files.
+
+    DynaFlow-launcher jobs files are rebuilt from scratch on every run
+    (loadflow_runner._reconstruct_dynaflow_job_xml has no notion of curves output),
+    so a <dyn:curves> reference previously added via the Edit Curves tab would
+    otherwise silently disappear whenever "keep debug files" regenerates the jobs file.
+    """
+    crv_files = [n for n, m in session.uploaded_files_info.items() if m.get("ftype") == "crv"]
+    if not crv_files:
+        return
+    for name in debug_files:
+        if session.uploaded_files_info.get(name, {}).get("ftype") != "jobs":
+            continue
+        try:
+            write_crv_reference_to_jobs(session.session_manager.get_path(name), crv_files[0])
+            session.session_manager.register_existing_file(name)
+        except Exception:
+            pass  # best-effort — the run itself already succeeded
+
+
 @router.post("/run")
 def run_loadflow(req: LfRunRequest, session: UserSession = Depends(get_session)):
     input_name = req.input_filename or session.network_name
@@ -182,6 +204,7 @@ def run_loadflow(req: LfRunRequest, session: UserSession = Depends(get_session))
             session.uploaded_files_info[name] = {"size": info.size, "ftype": info.ftype}
         except Exception:
             pass  # best-effort — the run itself already succeeded
+    _reapply_crv_reference(session, serialised.get("debug_files", []))
 
     session.lf_result = serialised
     return serialised
@@ -252,6 +275,7 @@ def run_security_analysis(req: SecurityAnalysisRunRequest, session: UserSession 
             session.uploaded_files_info[name] = {"size": info.size, "ftype": info.ftype}
         except Exception:
             pass  # best-effort — the run itself already succeeded
+    _reapply_crv_reference(session, serialised.get("debug_files", []))
 
     session.security_analysis_result = serialised
     return serialised
