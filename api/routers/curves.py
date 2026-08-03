@@ -45,9 +45,8 @@ def _get_dyd_lib_map(session: UserSession) -> dict[str, str]:
         return {}
 
 
-def _get_jobs_file(session: UserSession) -> str | None:
-    jobs_files = [n for n, m in session.uploaded_files_info.items() if m.get("ftype") == "jobs"]
-    return jobs_files[0] if jobs_files else None
+def _get_jobs_files(session: UserSession) -> list[str]:
+    return [n for n, m in session.uploaded_files_info.items() if m.get("ftype") == "jobs"]
 
 
 def _suggested_crv_filename(session: UserSession) -> str:
@@ -64,10 +63,10 @@ def _suggested_crv_filename(session: UserSession) -> str:
 
 @router.get("/init-info")
 def get_init_info(session: UserSession = Depends(get_session)):
-    """Return the suggested .crv filename and whether a jobs file will be patched."""
+    """Return the suggested .crv filename and whether any jobs file will be patched."""
     return {
         "suggested_filename": _suggested_crv_filename(session),
-        "has_jobs": _get_jobs_file(session) is not None,
+        "has_jobs": len(_get_jobs_files(session)) > 0,
     }
 
 
@@ -77,7 +76,7 @@ class InitRequest(BaseModel):
 
 @router.post("/init")
 def init_crv(req: InitRequest, session: UserSession = Depends(get_session)):
-    """Create an empty .crv file and link it in the jobs file (if present)."""
+    """Create an empty .crv file and link it in every jobs file in the session."""
     name = req.crv_filename.strip()
     if not name:
         raise HTTPException(status_code=422, detail="crv_filename must not be empty")
@@ -86,20 +85,19 @@ def init_crv(req: InitRequest, session: UserSession = Depends(get_session)):
     info = session.session_manager.add_file(name, raw)
     session.uploaded_files_info[name] = {"size": info.size, "ftype": info.ftype}
 
-    jobs_patched = False
-    jobs_name = _get_jobs_file(session)
-    if jobs_name:
+    patched_jobs: list[str] = []
+    for jobs_name in _get_jobs_files(session):
         jobs_path = session.session_manager.get_path(jobs_name)
         if os.path.isfile(jobs_path):
             try:
                 write_crv_reference_to_jobs(jobs_path, name)
                 # Refresh the stored raw bytes so the patched jobs is visible downstream
                 session.session_manager.register_existing_file(jobs_name)
-                jobs_patched = True
+                patched_jobs.append(jobs_name)
             except Exception as exc:
-                raise HTTPException(status_code=500, detail=f"Failed to patch jobs file: {exc}")
+                raise HTTPException(status_code=500, detail=f"Failed to patch jobs file {jobs_name}: {exc}")
 
-    return {"crv_file": name, "jobs_patched": jobs_patched}
+    return {"crv_file": name, "jobs_patched": len(patched_jobs) > 0, "patched_jobs": patched_jobs}
 
 
 @router.get("/list")
