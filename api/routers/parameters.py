@@ -15,26 +15,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from api.dependencies import get_session
+from api.dyd_models import get_dyd_models
 from api.session_store import UserSession
-from backend.dyd_parser import parse_dyd
 from backend.models import ChangeLogEntry, ParameterChange
 from backend.par_parser import macro_usage, parse_par
 from backend.par_writer import write_par_values
 
 router = APIRouter(tags=["parameters"])
-
-
-def _get_dyd_models(session: UserSession) -> dict[str, dict]:
-    dyd_files = [n for n, m in session.uploaded_files_info.items() if m.get("ftype") == "dyd"]
-    if not dyd_files:
-        return {}
-    raw = session.session_manager.get_raw(dyd_files[0])
-    if not raw:
-        return {}
-    try:
-        return parse_dyd(raw)
-    except Exception:
-        return {}
 
 
 def _get_par_set(session: UserSession, par_file: str, par_id: str) -> dict:
@@ -97,13 +84,13 @@ def list_models(session: UserSession = Depends(get_session)):
     return [
         {"dyn_id": info["dyn_id"], "static_id": info["static_id"], "lib": info["lib"],
          "parFile": info["parFile"], "parId": info["parId"]}
-        for info in _get_dyd_models(session).values()
+        for info in get_dyd_models(session).values()
     ]
 
 
 @router.get("/model/{model_id}")
 def get_model_params(model_id: str, session: UserSession = Depends(get_session)):
-    models = _get_dyd_models(session)
+    models = get_dyd_models(session)
     if model_id not in models:
         raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
     info = models[model_id]
@@ -129,7 +116,7 @@ class ApplyRequest(BaseModel):
 
 @router.put("/model/{model_id}")
 def apply_model_params(model_id: str, req: ApplyRequest, session: UserSession = Depends(get_session)):
-    models = _get_dyd_models(session)
+    models = get_dyd_models(session)
     if model_id not in models:
         raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
     info = models[model_id]

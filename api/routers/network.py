@@ -16,8 +16,8 @@ from fastapi.responses import Response
 
 from api.concurrency import pypowsybl_slot
 from api.dependencies import get_session
+from api.dyd_models import get_dyd_models
 from api.session_store import UserSession
-from backend.dyd_parser import parse_dyd
 from backend.jobs_parser import find_final_state_iidm
 from backend.network_diff import LEGEND as DIFF_LEGEND, DiffParams
 from backend.network_loader import (
@@ -43,19 +43,6 @@ _DYN_PALETTE = [
 def _lib_colors(dyn_models: dict) -> dict[str, str]:
     libs = sorted({info["lib"] for info in dyn_models.values()})
     return {lib: _DYN_PALETTE[i % len(_DYN_PALETTE)] for i, lib in enumerate(libs)}
-
-
-def _get_dyn_models(session: UserSession) -> dict:
-    dyd_files = [n for n, m in session.uploaded_files_info.items() if m.get("ftype") == "dyd"]
-    if not dyd_files:
-        return {}
-    raw = session.session_manager.get_raw(dyd_files[0])
-    if not raw:
-        return {}
-    try:
-        return parse_dyd(raw)
-    except Exception:
-        return {}
 
 
 def _get_all_par_data(session: UserSession) -> dict:
@@ -493,7 +480,7 @@ def get_dyn_models(session: UserSession = Depends(get_session)):
     """
     models = {
         info["static_id"]: info
-        for info in _get_dyn_models(session).values()
+        for info in get_dyd_models(session).values()
         if info["static_id"]
     }
     if not models:
