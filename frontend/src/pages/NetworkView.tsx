@@ -275,13 +275,12 @@ function NadTab({ networkBase, diffMode, diffConfig }: {
 // ── Dynamic model side panel ──────────────────────────────────────────────────
 
 interface PanelProps {
-  sid: string
   model: DynModel
   onClose: () => void
   onApplied: () => void
 }
 
-function DynModelPanel({ sid, model, onClose, onApplied }: PanelProps) {
+function DynModelPanel({ model, onClose, onApplied }: PanelProps) {
   const [formVals, setFormVals] = useState<Record<string, string>>(() => {
     const init: Record<string, string> = {}
     for (const p of model.pars) init[p.name] = p.value
@@ -296,8 +295,10 @@ function DynModelPanel({ sid, model, onClose, onApplied }: PanelProps) {
   const handleApply = async () => {
     setSaving(true); setError(null); setSuccess(null)
     try {
+      // /parameters is keyed on the .dyd model id; `sid` here is the staticId used
+      // to locate the element on the diagram, and the two need not be identical.
       const res = await client.put<{ changed: number }>(
-        `/parameters/model/${encodeURIComponent(sid)}`, { values: formVals })
+        `/parameters/model/${encodeURIComponent(model.dyn_id)}`, { values: formVals })
       setSuccess(`${res.data.changed} parameter(s) updated.`)
       onApplied()
     } catch (e: any) {
@@ -755,7 +756,6 @@ function SldTab({ networkBase, diffMode, diffConfig }: {
       {/* Dynamic model side panel */}
       {panelSid && dynModels[panelSid] && (
         <DynModelPanel
-          sid={panelSid}
           model={dynModels[panelSid]}
           onClose={() => setPanelSid(null)}
           onApplied={refreshDynModels}

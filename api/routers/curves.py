@@ -32,7 +32,11 @@ def _get_crv_file(session: UserSession) -> str | None:
 
 
 def _get_dyd_lib_map(session: UserSession) -> dict[str, str]:
-    """Return {dyn_id: lib} from the session's DYD file."""
+    """Return {dyn_id: lib} for every model of the session's DYD file.
+
+    A .crv <curve> names its target by the .dyd model id, so every model is a
+    valid curve target — including those with no staticId (OmegaRef, faults,
+    events, …)."""
     dyd_files = [n for n, m in session.uploaded_files_info.items() if m.get("ftype") == "dyd"]
     if not dyd_files:
         return {}
@@ -40,7 +44,7 @@ def _get_dyd_lib_map(session: UserSession) -> dict[str, str]:
     if not raw:
         return {}
     try:
-        return {info["dyn_id"]: info["lib"] for info in parse_dyd(raw).values()}
+        return {dyn_id: info["lib"] for dyn_id, info in parse_dyd(raw).items()}
     except Exception:
         return {}
 
