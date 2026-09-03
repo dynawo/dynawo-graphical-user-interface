@@ -244,8 +244,12 @@ export default function EditParameters() {
                     : <Tooltip title="This model has no staticId, so it does not appear on the network diagram — its parameters are edited from here.">
                         <Tag>no network reference</Tag>
                       </Tooltip>}
-                  <Text type="secondary">Par file: <Text code>{detail.parFile}</Text></Text>
-                  <Text type="secondary">Set ID: <Text code>{detail.parId}</Text></Text>
+                  {detail.parFile
+                    ? <>
+                        <Text type="secondary">Par file: <Text code>{detail.parFile}</Text></Text>
+                        <Text type="secondary">Set ID: <Text code>{detail.parId}</Text></Text>
+                      </>
+                    : <Tag>no parameter set</Tag>}
                   {detail.siblings.length > 0 && (
                     <Text type="warning">Shared set — also affects: {detail.siblings.join(', ')}</Text>
                   )}
@@ -279,6 +283,12 @@ export default function EditParameters() {
                 </Space>
               }
             >
+              {detail.pars.length === 0 && detail.refs.length === 0 && (
+                <Text type="secondary">
+                  This model references no parameter set — nothing to edit here.
+                </Text>
+              )}
+
               {detail.pars.length > 0 && (
                 <Table
                   size="small"

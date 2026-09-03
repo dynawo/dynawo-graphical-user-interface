@@ -15,11 +15,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from api.dependencies import get_session
+from api.dyd_models import get_dyd_models
 from api.session_store import UserSession
 from backend.crv_parser import parse_crv
 from backend.crv_writer import build_crv_bytes, write_crv
 from backend.desc_parser import get_lib_variables
-from backend.dyd_parser import parse_dyd
 from backend.jobs_parser import write_crv_reference_to_jobs
 from backend.models import CrvChangeLogEntry, CurveChange
 
@@ -37,16 +37,7 @@ def _get_dyd_lib_map(session: UserSession) -> dict[str, str]:
     A .crv <curve> names its target by the .dyd model id, so every model is a
     valid curve target — including those with no staticId (OmegaRef, faults,
     events, …)."""
-    dyd_files = [n for n, m in session.uploaded_files_info.items() if m.get("ftype") == "dyd"]
-    if not dyd_files:
-        return {}
-    raw = session.session_manager.get_raw(dyd_files[0])
-    if not raw:
-        return {}
-    try:
-        return {dyn_id: info["lib"] for dyn_id, info in parse_dyd(raw).items()}
-    except Exception:
-        return {}
+    return {dyn_id: info["lib"] for dyn_id, info in get_dyd_models(session).items()}
 
 
 def _get_jobs_file(session: UserSession) -> str | None:
