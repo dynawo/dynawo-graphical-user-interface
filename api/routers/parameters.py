@@ -47,7 +47,7 @@ def _get_par_set(session: UserSession, par_file: str, par_id: str) -> dict:
 
 
 def _get_macro_siblings(
-    session: UserSession, info: dict, models: dict[str, dict], sid: str, macro_id: str | None,
+    session: UserSession, info: dict, models: dict[str, dict], model_id: str, macro_id: str | None,
 ) -> list[str]:
     """dyn_ids of other dynamic models whose <set> references the same
     <macroParameterSet> as this one — i.e. models that an edit to one of
@@ -63,8 +63,8 @@ def _get_macro_siblings(
         usage = macro_usage(fh.read())
     sharing_set_ids = set(usage.get(macro_id, [])) - {info["parId"]}
     return sorted({
-        models[s]["dyn_id"] for s in models
-        if s != sid and models[s]["parFile"] == info["parFile"] and models[s]["parId"] in sharing_set_ids
+        m["dyn_id"] for mid, m in models.items()
+        if mid != model_id and m["parFile"] == info["parFile"] and m["parId"] in sharing_set_ids
     })
 
 
@@ -91,32 +91,34 @@ def get_modified_par_files(session: UserSession = Depends(get_session)):
 
 @router.get("/models")
 def list_models(session: UserSession = Depends(get_session)):
-    models = _get_dyd_models(session)
+    """Every dynamic model of the .dyd, whether or not it is bound to a network
+    element — models with no staticId (OmegaRef, faults, events, …) carry an
+    empty `static_id` and are editable like any other."""
     return [
-        {"sid": sid, "dyn_id": info["dyn_id"], "lib": info["lib"],
+        {"dyn_id": info["dyn_id"], "static_id": info["static_id"], "lib": info["lib"],
          "parFile": info["parFile"], "parId": info["parId"]}
-        for sid, info in models.items()
+        for info in _get_dyd_models(session).values()
     ]
 
 
-@router.get("/model/{sid}")
-def get_model_params(sid: str, session: UserSession = Depends(get_session)):
+@router.get("/model/{model_id}")
+def get_model_params(model_id: str, session: UserSession = Depends(get_session)):
     models = _get_dyd_models(session)
-    if sid not in models:
-        raise HTTPException(status_code=404, detail=f"Model {sid} not found")
-    info = models[sid]
+    if model_id not in models:
+        raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
+    info = models[model_id]
     par_set = _get_par_set(session, info["parFile"], info["parId"])
 
     siblings = [
-        models[s]["dyn_id"] for s in models
-        if s != sid
-        and models[s]["parFile"] == info["parFile"]
-        and models[s]["parId"] == info["parId"]
+        m["dyn_id"] for mid, m in models.items()
+        if mid != model_id
+        and m["parFile"] == info["parFile"]
+        and m["parId"] == info["parId"]
     ]
     macro_id = par_set.get("macro_id")
-    macro_siblings = _get_macro_siblings(session, info, models, sid, macro_id)
+    macro_siblings = _get_macro_siblings(session, info, models, model_id, macro_id)
     return {
-        **info, "sid": sid, "pars": par_set["pars"], "refs": par_set["refs"],
+        **info, "pars": par_set["pars"], "refs": par_set["refs"],
         "siblings": siblings, "macro_id": macro_id, "macro_siblings": macro_siblings,
     }
 
@@ -125,12 +127,12 @@ class ApplyRequest(BaseModel):
     values: dict[str, str]
 
 
-@router.put("/model/{sid}")
-def apply_model_params(sid: str, req: ApplyRequest, session: UserSession = Depends(get_session)):
+@router.put("/model/{model_id}")
+def apply_model_params(model_id: str, req: ApplyRequest, session: UserSession = Depends(get_session)):
     models = _get_dyd_models(session)
-    if sid not in models:
-        raise HTTPException(status_code=404, detail=f"Model {sid} not found")
-    info = models[sid]
+    if model_id not in models:
+        raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
+    info = models[model_id]
     par_path = session.session_manager.get_path(info["parFile"])
     if not os.path.isfile(par_path):
         raise HTTPException(status_code=404, detail=f"Par file {info['parFile']} not found")

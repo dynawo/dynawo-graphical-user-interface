@@ -19,8 +19,9 @@ import client from '../api/client'
 const { Title, Text } = Typography
 
 interface ModelEntry {
-  sid: string
   dyn_id: string
+  /** IIDM element this model is bound to — "" for models with no static reference. */
+  static_id: string
   lib: string
   parFile: string
   parId: string
@@ -51,7 +52,7 @@ function valuesEqual(fileVal: string, widgetVal: string, type: string): boolean 
 
 export default function EditParameters() {
   const [models, setModels] = useState<ModelEntry[]>([])
-  const [selectedSid, setSelectedSid] = useState<string | null>(null)
+  const [selectedModelId, setSelectedModelId] = useState<string | null>(null)
   const [detail, setDetail] = useState<ModelDetail | null>(null)
   const [formVals, setFormVals] = useState<Record<string, string>>({})
   const [changelog, setChangelog] = useState<LogEntry[]>([])
@@ -64,7 +65,7 @@ export default function EditParameters() {
     try {
       const res = await client.get<ModelEntry[]>('/parameters/models')
       setModels(res.data)
-      if (res.data.length && !selectedSid) setSelectedSid(res.data[0].sid)
+      if (res.data.length && !selectedModelId) setSelectedModelId(res.data[0].dyn_id)
     } catch {
       setModels([])
     }
@@ -80,9 +81,9 @@ export default function EditParameters() {
     setModifiedParFiles(res.data)
   }
 
-  const fetchDetail = async (sid: string) => {
+  const fetchDetail = async (modelId: string) => {
     try {
-      const res = await client.get<ModelDetail>(`/parameters/model/${encodeURIComponent(sid)}`)
+      const res = await client.get<ModelDetail>(`/parameters/model/${encodeURIComponent(modelId)}`)
       setDetail(res.data)
       const initial: Record<string, string> = {}
       for (const p of res.data.pars) initial[p.name] = p.value
@@ -90,26 +91,26 @@ export default function EditParameters() {
     } catch (err: any) {
       setDetail(null)
       setFormVals({})
-      setError(err.response?.data?.detail ?? `Could not load parameters for ${sid}`)
+      setError(err.response?.data?.detail ?? `Could not load parameters for ${modelId}`)
     }
   }
 
   useEffect(() => { fetchModels(); fetchChangelog(); fetchModified() }, [])
-  useEffect(() => { if (selectedSid) fetchDetail(selectedSid) }, [selectedSid])
+  useEffect(() => { if (selectedModelId) fetchDetail(selectedModelId) }, [selectedModelId])
 
   const changed = detail
     ? detail.pars.some(p => !valuesEqual(p.value, formVals[p.name] ?? p.value, p.type))
     : false
 
   const handleApply = async () => {
-    if (!selectedSid) return
+    if (!selectedModelId) return
     setSaving(true)
     setError(null)
     setSuccess(null)
     try {
       const res = await client.put<{ changed: number }>(
-        `/parameters/model/${encodeURIComponent(selectedSid)}`, { values: formVals })
-      await fetchDetail(selectedSid)
+        `/parameters/model/${encodeURIComponent(selectedModelId)}`, { values: formVals })
+      await fetchDetail(selectedModelId)
       await fetchChangelog()
       await fetchModified()
       setSuccess(`${res.data.changed} parameter(s) updated.`)
@@ -122,7 +123,7 @@ export default function EditParameters() {
 
   const handleRestore = async (parFile: string) => {
     await client.post(`/parameters/restore/${encodeURIComponent(parFile)}`)
-    if (selectedSid) await fetchDetail(selectedSid)
+    if (selectedModelId) await fetchDetail(selectedModelId)
     await fetchChangelog()
     await fetchModified()
     setSuccess(`${parFile} restored to original.`)
@@ -137,7 +138,7 @@ export default function EditParameters() {
     const res = await client.post<{ ok: boolean; warned: boolean }>(
       `/parameters/changelog/${encodeURIComponent(entry.dyn_id)}/revert/${encodeURIComponent(entry.timestamp)}`
     )
-    if (selectedSid) await fetchDetail(selectedSid)
+    if (selectedModelId) await fetchDetail(selectedModelId)
     await fetchChangelog()
     await fetchModified()
     if (res.data.warned)
@@ -147,8 +148,12 @@ export default function EditParameters() {
   }
 
   const modelOptions = models.map(m => ({
-    label: `${m.dyn_id}  (${m.lib})`,
-    value: m.sid,
+    // Static id only shown when it adds something — it is usually identical to the
+    // model id, and absent altogether for models with no network reference.
+    label: m.static_id && m.static_id !== m.dyn_id
+      ? `${m.dyn_id}  (${m.lib})  ·  ${m.static_id}`
+      : `${m.dyn_id}  (${m.lib})`,
+    value: m.dyn_id,
   }))
 
   return (
@@ -225,8 +230,8 @@ export default function EditParameters() {
               <Text strong>Select dynamic model</Text>
               <Select
                 options={modelOptions}
-                value={selectedSid}
-                onChange={setSelectedSid}
+                value={selectedModelId}
+                onChange={setSelectedModelId}
                 style={{ width: '100%' }}
                 showSearch
                 optionFilterProp="label"
@@ -234,6 +239,11 @@ export default function EditParameters() {
               {detail && (
                 <Space wrap>
                   <Tag color="blue">{detail.lib}</Tag>
+                  {detail.static_id
+                    ? <Text type="secondary">Static ID: <Text code>{detail.static_id}</Text></Text>
+                    : <Tooltip title="This model has no staticId, so it does not appear on the network diagram — its parameters are edited from here.">
+                        <Tag>no network reference</Tag>
+                      </Tooltip>}
                   <Text type="secondary">Par file: <Text code>{detail.parFile}</Text></Text>
                   <Text type="secondary">Set ID: <Text code>{detail.parId}</Text></Text>
                   {detail.siblings.length > 0 && (

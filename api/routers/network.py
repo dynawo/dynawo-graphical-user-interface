@@ -483,7 +483,19 @@ def get_file_diff_sld(
 
 @router.get("/dyn-models")
 def get_dyn_models(session: UserSession = Depends(get_session)):
-    models = _get_dyn_models(session)
+    """Return {staticId: {...}} for the dynamic models bound to a network element.
+
+    Deliberately restricted to models carrying a staticId: this map exists to
+    colour and click network elements on the single-line diagram, and a model
+    with no static reference (OmegaRef, faults, events, …) has no place on it.
+    Those models are still fully editable through /parameters and /curves,
+    which key on the .dyd model id instead.
+    """
+    models = {
+        info["static_id"]: info
+        for info in _get_dyn_models(session).values()
+        if info["static_id"]
+    }
     if not models:
         return {}
     colors = _lib_colors(models)
