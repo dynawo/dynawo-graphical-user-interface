@@ -19,7 +19,7 @@ from api.dyd_models import get_dyd_models
 from api.session_store import UserSession
 from backend.crv_parser import parse_crv
 from backend.crv_writer import build_crv_bytes, write_crv
-from backend.desc_parser import get_lib_variables
+from backend.desc_parser import get_lib_symbols
 from backend.jobs_parser import write_crv_reference_to_jobs
 from backend.models import CrvChangeLogEntry, CurveChange
 
@@ -154,19 +154,23 @@ def list_curves(session: UserSession = Depends(get_session)):
 
 @router.get("/catalogue")
 def get_variable_catalogue(session: UserSession = Depends(get_session)):
-    """Return descriptor-file variables per model. Requires a configured Dynawo executable."""
+    """Return descriptor-file variables and parameters per model.
+
+    Requires a configured Dynawo executable. Both kinds are valid curve targets:
+    Dynawo resolves a .crv <curve> variable against the model variables first and
+    falls back to its parameters."""
     exe = session.dynawo_executable
     if not exe or not os.path.isfile(exe):
         return {"available": False, "catalogue": {}}
     lib_map = _get_dyd_lib_map(session)
-    lib_cache: dict[str, list[str]] = {}
+    lib_cache: dict[str, tuple[list[str], list[str]]] = {}
     catalogue: dict[str, dict] = {}
     for dyn_id, lib in lib_map.items():
         if lib not in lib_cache:
-            lib_cache[lib] = get_lib_variables(exe, lib)
-        variables = lib_cache[lib]
-        if variables:
-            catalogue[dyn_id] = {"lib": lib, "variables": variables}
+            lib_cache[lib] = get_lib_symbols(exe, lib)
+        variables, parameters = lib_cache[lib]
+        if variables or parameters:
+            catalogue[dyn_id] = {"lib": lib, "variables": variables, "parameters": parameters}
     return {"available": True, "catalogue": catalogue}
 
 

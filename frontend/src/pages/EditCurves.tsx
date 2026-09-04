@@ -24,7 +24,7 @@ interface ListResp    { crv_file: string; modified: boolean; groups: CurveGroup[
 interface CurveChange { model: string; variable: string; action: 'added' | 'removed' }
 interface LogEntry    { timestamp: string; crv_file: string; changes: CurveChange[] }
 
-interface CatalogueEntry { lib: string; variables: string[] }
+interface CatalogueEntry { lib: string; variables: string[]; parameters: string[] }
 interface CatalogueResp  { available: boolean; catalogue: Record<string, CatalogueEntry> }
 interface InitInfo       { suggested_filename: string; has_jobs: boolean }
 
@@ -73,17 +73,28 @@ const editCurvesCache: EditCurvesCache = {
 const HEADER_HEIGHT = 44
 const SELECT_ALL_HEIGHT = 34
 const VARIABLE_ROW_HEIGHT = 30
-const ADD_ROW_HEIGHT = 48
+const ADD_ROW_HEIGHT = 74
 const CONTENT_PADDING = 12
+
+// A .crv <curve> variable= is resolved by Dynawo against the model's variables first
+// and against its parameters as a fallback, so a descriptor's parameters are valid curve
+// targets too — they just yield a constant curve. Both are offered, kept apart so the user
+// can tell a state variable from a parameter.
+interface AvailableToAdd { variables: string[]; parameters: string[] }
+const NOTHING_TO_ADD: AvailableToAdd = { variables: [], parameters: [] }
 
 function getAvailableToAdd(
   g: CurveGroup,
   catalogue: Record<string, CatalogueEntry>,
   catalogueAvailable: boolean,
-): string[] {
-  return catalogueAvailable
-    ? (catalogue[g.model]?.variables ?? []).filter(v => !g.curves.some(c => c.variable === v))
-    : []
+): AvailableToAdd {
+  const entry = catalogueAvailable ? catalogue[g.model] : undefined
+  if (!entry) return NOTHING_TO_ADD
+  const existing = new Set(g.curves.map(c => c.variable))
+  return {
+    variables:  (entry.variables  ?? []).filter(v => !existing.has(v)),
+    parameters: (entry.parameters ?? []).filter(v => !existing.has(v)),
+  }
 }
 
 function estimateRowHeight(g: CurveGroup, expanded: boolean, hasAddRow: boolean): number {
@@ -111,7 +122,7 @@ interface ModelRowProps {
   catalogueAvailable: boolean
   pickerVals: Record<string, string | undefined>
   handleAddVariable: (model: string, variable: string) => void
-  handleSelectModelFromCatalogue: (model: string) => void
+  handleSelectModelFromCatalogue: (model: string, kind: 'variables' | 'parameters') => void
   handlePropagateVariable: (model: string, variable: string) => void
 }
 
@@ -128,6 +139,9 @@ function ModelRow({
   const allChecked = g.curves.length > 0 && activeCount === g.curves.length
   const noneChecked = activeCount === 0
   const availableToAdd = getAvailableToAdd(g, catalogue, catalogueAvailable)
+  const hasAddRow = availableToAdd.variables.length + availableToAdd.parameters.length > 0
+  // Only the expanded row needs this, and only one row is ever expanded.
+  const paramNames = expanded ? new Set(catalogue[g.model]?.parameters ?? []) : new Set<string>()
   const siblingGroups = expanded && g.lib ? allGroups.filter(o => o.lib === g.lib && o.model !== g.model) : []
 
   const toggleAll = () => {
@@ -188,6 +202,11 @@ function ModelRow({
                 <Text code style={{ color: isDirty ? '#faad14' : undefined }}>
                   {c.variable}
                 </Text>
+                {paramNames.has(c.variable) && (
+                  <Tooltip title="Model parameter — constant over the simulation">
+                    <Tag color="purple" style={{ fontSize: 11 }}>param</Tag>
+                  </Tooltip>
+                )}
                 {c.extra && !isDirty && (
                   <Tag color="cyan" style={{ fontSize: 11 }}>new</Tag>
                 )}
@@ -209,27 +228,44 @@ function ModelRow({
               </div>
             )
           })}
-          {availableToAdd.length > 0 && (
-            <div style={{ paddingTop: 6, borderTop: '1px solid rgba(0,0,0,0.06)' }}>
+          {hasAddRow && (
+            <Flex vertical gap={6} style={{ paddingTop: 6, borderTop: '1px solid rgba(0,0,0,0.06)' }}>
+              <Select
+                showSearch={{ optionFilterProp: 'label' }}
+                placeholder={<><PlusOutlined style={{ marginRight: 4 }} />Add variable or parameter from catalogue…</>}
+                size="small"
+                value={pickerVals[g.model]}
+                onChange={(v: string) => handleAddVariable(g.model, v)}
+                options={[
+                  ...(availableToAdd.variables.length
+                    ? [{ label: 'Variables', options: availableToAdd.variables.map(v => ({ label: v, value: v })) }]
+                    : []),
+                  ...(availableToAdd.parameters.length
+                    ? [{ label: 'Parameters', options: availableToAdd.parameters.map(v => ({ label: v, value: v })) }]
+                    : []),
+                ]}
+              />
               <Flex gap={8}>
-                <Select
-                  showSearch={{ optionFilterProp: 'label' }}
-                  placeholder={<><PlusOutlined style={{ marginRight: 4 }} />Add variable from catalogue…</>}
-                  size="small"
-                  style={{ flex: 1 }}
-                  value={pickerVals[g.model]}
-                  onChange={(v: string) => handleAddVariable(g.model, v)}
-                  options={availableToAdd.map(v => ({ label: v, value: v }))}
-                />
-                <Button
-                  size="small"
-                  icon={<CheckSquareOutlined />}
-                  onClick={() => handleSelectModelFromCatalogue(g.model)}
-                >
-                  Add all ({availableToAdd.length})
-                </Button>
+                {availableToAdd.variables.length > 0 && (
+                  <Button
+                    size="small"
+                    icon={<CheckSquareOutlined />}
+                    onClick={() => handleSelectModelFromCatalogue(g.model, 'variables')}
+                  >
+                    Add all variables ({availableToAdd.variables.length})
+                  </Button>
+                )}
+                {availableToAdd.parameters.length > 0 && (
+                  <Button
+                    size="small"
+                    icon={<CheckSquareOutlined />}
+                    onClick={() => handleSelectModelFromCatalogue(g.model, 'parameters')}
+                  >
+                    Add all parameters ({availableToAdd.parameters.length})
+                  </Button>
+                )}
               </Flex>
-            </div>
+            </Flex>
           )}
         </Flex>
       )}
@@ -456,24 +492,26 @@ export default function EditCurves() {
     }
   }
 
-  const handleSelectModelFromCatalogue = (model: string) => {
+  const handleSelectModelFromCatalogue = (model: string, kind: 'variables' | 'parameters') => {
     const entry = catalogue[model]
     if (!entry) return
+    const names = entry[kind] ?? []
+    if (names.length === 0) return
     setGroups(prev => {
       const idx = prev.findIndex(g => g.model === model)
       if (idx >= 0) {
         const existingVars = new Set(prev[idx].curves.map(c => c.variable))
-        const toAdd = entry.variables.filter(v => !existingVars.has(v))
+        const toAdd = names.filter(v => !existingVars.has(v))
         if (toAdd.length === 0) return prev
         const next = [...prev]
         next[idx] = { ...next[idx], curves: [...next[idx].curves, ...toAdd.map(v => ({ variable: v, active: true, extra: true }))] }
         return next
       }
-      return [...prev, { model, lib: entry.lib, curves: entry.variables.map(v => ({ variable: v, active: true, extra: true })) }]
+      return [...prev, { model, lib: entry.lib, curves: names.map(v => ({ variable: v, active: true, extra: true })) }]
     })
     setSelection(prev => {
       const next = { ...prev }
-      for (const v of entry.variables) next[selKey(model, v)] = true
+      for (const v of names) next[selKey(model, v)] = true
       return next
     })
   }
@@ -508,6 +546,9 @@ export default function EditCurves() {
     })
   }
 
+  // Variables only, deliberately: parameters outnumber variables in most descriptors and
+  // are constant over the run, so adding every one across the whole network is never what the
+  // user means by "select all". Parameters are added per model (picker / "Add all parameters").
   const handleSelectAllCatalogue = () => {
     setGroups(prev => {
       const next = [...prev]
@@ -547,7 +588,8 @@ export default function EditCurves() {
     const g = cellProps.filteredGroups[index]
     if (!g) return HEADER_HEIGHT
     const expanded = g.model === cellProps.activeKey
-    const hasAddRow = getAvailableToAdd(g, cellProps.catalogue, cellProps.catalogueAvailable).length > 0
+    const avail = getAvailableToAdd(g, cellProps.catalogue, cellProps.catalogueAvailable)
+    const hasAddRow = avail.variables.length + avail.parameters.length > 0
     return estimateRowHeight(g, expanded, hasAddRow)
   }, [])
 
@@ -654,9 +696,11 @@ export default function EditCurves() {
 
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginBottom: 12 }}>
         {catalogueAvailable && (
-          <Button icon={<CheckSquareOutlined />} onClick={handleSelectAllCatalogue}>
-            Select all from catalogue
-          </Button>
+          <Tooltip title="Adds every variable of every model. Parameters are added per model.">
+            <Button icon={<CheckSquareOutlined />} onClick={handleSelectAllCatalogue}>
+              Select all variables
+            </Button>
+          </Tooltip>
         )}
         <Button
           type="primary"

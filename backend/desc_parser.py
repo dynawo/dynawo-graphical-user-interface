@@ -14,21 +14,47 @@ import xml.etree.ElementTree as ET
 _NS = "http://www.rte-france.com/dynawo"
 
 
-def get_lib_variables(dynawo_exe: str, lib: str) -> list[str]:
-    """Return sorted variable names for a library from its ddb/<lib>.desc.xml.
-    Returns [] if the executable path is unset, the file is missing, or parsing fails.
-    """
+def _desc_path(dynawo_exe: str, lib: str) -> str | None:
     if not dynawo_exe:
-        return []
-    desc_path = os.path.join(os.path.dirname(dynawo_exe), "ddb", f"{lib}.desc.xml")
-    if not os.path.isfile(desc_path):
-        return []
+        return None
+    path = os.path.join(os.path.dirname(dynawo_exe), "ddb", f"{lib}.desc.xml")
+    return path if os.path.isfile(path) else None
+
+
+def get_lib_symbols(dynawo_exe: str, lib: str) -> tuple[list[str], list[str]]:
+    """Return (variables, parameters) declared by a library's ddb/<lib>.desc.xml.
+
+    A .crv <curve> accepts either kind of name: Dynawo resolves the curve against
+    the model's variables first and falls back to its parameters (a parameter curve
+    is simply constant over time).
+    Returns ([], []) if the executable path is unset, the file is missing, or
+    parsing fails.
+    """
+    desc_path = _desc_path(dynawo_exe, lib)
+    if not desc_path:
+        return [], []
     try:
         root = ET.parse(desc_path).getroot()
-        return sorted(
+        variables = sorted(
             v.get("name")
             for v in root.findall(f".//{{{_NS}}}variable")
             if v.get("name")
         )
+        parameters = sorted(
+            p.get("name")
+            for p in root.findall(f".//{{{_NS}}}parameter")
+            if p.get("name")
+        )
+        return variables, parameters
     except Exception:
-        return []
+        return [], []
+
+
+def get_lib_variables(dynawo_exe: str, lib: str) -> list[str]:
+    """Return sorted variable names for a library from its ddb/<lib>.desc.xml."""
+    return get_lib_symbols(dynawo_exe, lib)[0]
+
+
+def get_lib_parameters(dynawo_exe: str, lib: str) -> list[str]:
+    """Return sorted parameter names for a library from its ddb/<lib>.desc.xml."""
+    return get_lib_symbols(dynawo_exe, lib)[1]
