@@ -809,9 +809,9 @@ both logs can be managed independently.
 \label{sec:editcurves}
 
 This page manages the \ftype{crv} file that tells Dynawo which model output
-variables to write to \code{curves/curves.csv} during a simulation. Requires
-a \ftype{dyd} file in the session. A configured Dynawo executable
-(Section~\ref{sec:dynawoversion}) unlocks the variable catalogue.
+variables (or parameters) to write to \code{curves/curves.csv} during a
+simulation. Requires a \ftype{dyd} file in the session. A configured Dynawo
+executable (Section~\ref{sec:dynawoversion}) unlocks the variable catalogue.
 
 \subsection{Creating a curves file from scratch}
 
@@ -842,19 +842,27 @@ selected variables over the total available. Inside each panel:
 \subsection{Variable catalogue}
 
 When a Dynawo executable is configured, the application reads the descriptor
-files for each model library and makes the full list of available variables
-accessible:
+files (\code{ddb/<library>.desc.xml}) for each model library and makes the full
+list of available \textbf{variables} and \textbf{parameters} accessible. Both
+are valid curve targets: Dynawo resolves the \code{variable} attribute of a
+\ftype{crv} entry against the model variables first and falls back to its
+parameters --- a parameter simply yields a curve that is constant over the run,
+which is handy to check the value a model was actually initialised with.
 
 \begin{description}[leftmargin=2em]
   \item[\textbf{Dropdown picker}] Each model panel shows a searchable dropdown
-    listing all catalogue variables not yet in the \ftype{crv} file. Selecting
-    a variable adds it immediately.
-  \item[\textbf{Add all (N)}] Button next to the picker; adds all remaining
-    catalogue variables for that model in one click. \emph{N} is the count of
-    variables that would be added.
-  \item[\textbf{Select all from catalogue}] Global button in the toolbar; adds
-    every catalogue variable across all models at once. Useful when creating a
+    listing everything not yet in the \ftype{crv} file, split into two groups,
+    \emph{Variables} and \emph{Parameters}. Selecting an entry adds it
+    immediately. Parameters already in the file are flagged with a
+    \emph{param} tag in the list.
+  \item[\textbf{Add all variables (N)} / \textbf{Add all parameters (N)}]
+    Buttons below the picker; each adds all remaining catalogue entries of that
+    kind for the model in one click. \emph{N} is the count that would be added.
+  \item[\textbf{Select all variables}] Global button in the toolbar; adds every
+    catalogue variable across all models at once. Useful when creating a
     \ftype{crv} file from scratch and wanting to start with the full set.
+    Parameters are deliberately excluded here --- descriptors declare many more
+    parameters than variables, so they are added per model instead.
 \end{description}
 
 \subsection{Manual add}
@@ -998,7 +1006,7 @@ The chart grows taller as plots are added.
   \item \textbf{Edit Curves} --- define which variables to export. If the
     uploaded case already includes a \ftype{crv} file, skip to step~5.
     Otherwise click \textbf{Create}, then select the desired variables using
-    the catalogue picker or the \textbf{Select all from catalogue} button, and
+    the catalogue picker or the \textbf{Select all variables} button, and
     click \textbf{Apply changes} (Section~\ref{sec:editcurves}).
   \item \textbf{Run Simulation} --- run a first simulation (\emph{Run~1}).
     The network is loaded automatically when you first visit \textbf{Network
