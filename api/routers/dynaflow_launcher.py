@@ -25,7 +25,7 @@ from backend.powsybl_config import (
     clear_dynaflow_home, get_dynaflow_home, set_dynaflow_home,
     get_starting_point_mode, set_starting_point_mode,
 )
-from backend.user_config import load_user_config, save_user_config
+from backend.user_config import update_user_config
 
 router = APIRouter(tags=["dynaflow_launcher"])
 
@@ -168,8 +168,12 @@ def use_version(os_key: str, version: str):
         )
     set_dynaflow_home(home)
     restart_pypowsybl_pool()
-    # Read-merge-write: never clobber other keys (e.g. dynawo_executable) in config.json
-    save_user_config({**load_user_config(), "dynaflow_launcher_version": f"{os_key}:{version}"})
+    # update_user_config, never load+save: the read-modify-write must happen under
+    # its lock or a concurrent writer (e.g. a Load Flow panel saving its
+    # parameters) silently drops whichever key lands first.
+    update_user_config(
+        lambda cfg: cfg.__setitem__("dynaflow_launcher_version", f"{os_key}:{version}")
+    )
     return {"home_dir": home}
 
 
@@ -213,7 +217,7 @@ def set_starting_point_mode_endpoint(req: StartingPointModeRequest):
         raise HTTPException(status_code=422, detail="mode must be WARM or FLAT")
     set_starting_point_mode(req.mode)
     restart_pypowsybl_pool()
-    save_user_config({**load_user_config(), "dynaflow_starting_point_mode": req.mode})
+    update_user_config(lambda cfg: cfg.__setitem__("dynaflow_starting_point_mode", req.mode))
     return {"ok": True, "mode": req.mode}
 
 
@@ -232,7 +236,5 @@ def set_home(req: HomeDirRequest):
     set_dynaflow_home(home_dir)
     restart_pypowsybl_pool()
     # Manual path is not one of our managed downloads — drop the tracked version key
-    cfg = load_user_config()
-    cfg.pop("dynaflow_launcher_version", None)
-    save_user_config(cfg)
+    update_user_config(lambda cfg: cfg.pop("dynaflow_launcher_version", None))
     return {"home_dir": home_dir}

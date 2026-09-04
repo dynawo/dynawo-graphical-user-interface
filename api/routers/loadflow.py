@@ -24,6 +24,9 @@ from api.session_store import UserSession
 from backend import loadflow_runner
 from backend.jobs_parser import write_crv_reference_to_jobs
 from backend.powsybl_config import bootstrap_new_worker
+from backend.user_config import (
+    clear_loadflow_parameters, get_loadflow_parameters, save_loadflow_parameters,
+)
 
 router = APIRouter(tags=["loadflow"])
 
@@ -100,6 +103,38 @@ def get_providers():
 @router.get("/provider-parameters/{provider}")
 def get_provider_parameter_specs(provider: str):
     return loadflow_runner.provider_parameter_specs(provider)
+
+
+class SavedParametersRequest(BaseModel):
+    # The panel state to remember, forwarded verbatim: the generic pypowsybl
+    # fields plus provider_parameters, ac and the output settings. Kept
+    # schema-free on purpose so a pypowsybl upgrade that adds or renames
+    # fields needs no change here — LfPanel merges what comes back on top of
+    # the live spec defaults and ignores anything the spec no longer knows.
+    parameters: dict[str, Any] = {}
+
+
+@router.get("/saved-parameters/{provider}")
+def get_saved_parameters(provider: str):
+    """Return the user's last-saved panel settings for this provider.
+
+    Persisted on disk in ~/.config/dynawo_ihm/config.json, like the chosen
+    Dynawo and DynaFlow-launcher versions, so the choices survive restarting
+    the application and not just navigating away from the page.
+    """
+    return {"parameters": get_loadflow_parameters(provider)}
+
+
+@router.put("/saved-parameters/{provider}")
+def put_saved_parameters(provider: str, req: SavedParametersRequest):
+    save_loadflow_parameters(provider, req.parameters)
+    return {"ok": True}
+
+
+@router.delete("/saved-parameters/{provider}")
+def delete_saved_parameters(provider: str):
+    clear_loadflow_parameters(provider)
+    return {"ok": True}
 
 
 @router.get("/result")
