@@ -17,7 +17,7 @@ import {
 import {
   CheckCircleOutlined, CloseCircleOutlined, DeleteOutlined, DownloadOutlined,
   FolderOpenOutlined, MinusCircleOutlined, SyncOutlined, ThunderboltOutlined,
-  WarningOutlined,
+  UndoOutlined, WarningOutlined,
 } from '@ant-design/icons'
 import client from '../api/client'
 import DirectoryPicker from './DirectoryPicker'
@@ -601,23 +601,51 @@ function SecurityAnalysisSection({
   )
 }
 
-// ── LfPanel sessionStorage persistence ────────────────────────────────────────
+// ── LfPanel persistence ───────────────────────────────────────────────────────
+//
+// Two stores, because the two halves of the panel have different lifetimes:
+//
+//  • Parameters (ac, the pypowsybl fields, provider_parameters, IIDM version,
+//    keep-debug-files) are kept by the server in ~/.config/dynawo_ihm/config.json
+//    — the same file that remembers the chosen Dynawo and DynaFlow-launcher
+//    versions — so the choices are still there next time the app is opened.
+//  • File selections (input IIDM, output base name) stay in sessionStorage:
+//    they name uploaded files belonging to the current session, so restoring
+//    them into a fresh session would point at files that no longer exist.
 
-interface SavedLfPanel {
-  ac: boolean
-  lfParams: LfDefaults
-  iidmVersion: string
-  keepDebugFiles: boolean
+interface SavedLfSelection {
   inputFile: string | null
   outputBaseName: string
 }
 
-function loadLfPanel(provider: string): SavedLfPanel | null {
+function loadLfSelection(provider: string): SavedLfSelection | null {
   try { return JSON.parse(sessionStorage.getItem(`lfpanel_${provider}`) ?? 'null') } catch { return null }
 }
 
-function saveLfPanel(provider: string, s: SavedLfPanel): void {
+function saveLfSelection(provider: string, s: SavedLfSelection): void {
   try { sessionStorage.setItem(`lfpanel_${provider}`, JSON.stringify(s)) } catch {}
+}
+
+// Server-side half. Every field is optional: a set saved by an older build (or
+// against an older pypowsybl) is merged over the current defaults, never used
+// in place of them.
+interface SavedLfParams {
+  ac?: boolean
+  lfParams?: LfDefaults
+  iidmVersion?: string
+  keepDebugFiles?: boolean
+}
+
+// Compared against the last known server state to decide whether a write is
+// needed at all. Fields are listed explicitly so the key order — and therefore
+// the string — depends only on this function, not on how the object was built.
+function serializeLfParams(p: SavedLfParams): string {
+  return JSON.stringify({
+    ac: p.ac,
+    lfParams: p.lfParams,
+    iidmVersion: p.iidmVersion,
+    keepDebugFiles: p.keepDebugFiles,
+  })
 }
 
 // ── LF panel (one per provider) ────────────────────────────────────────────────
@@ -638,38 +666,123 @@ function LfPanel({
   onDynaflowActiveChange?: (home: string | null) => void
   onRunComplete?: () => void
 }) {
-  const [saved] = useState<SavedLfPanel | null>(() => loadLfPanel(provider))
-  const [ac, setAc] = useState(saved?.ac ?? true)
-  const [lfParams, setLfParams] = useState<LfDefaults>(saved?.lfParams ?? { ...defaults })
+  const [saved] = useState<SavedLfSelection | null>(() => loadLfSelection(provider))
+  const [ac, setAc] = useState(true)
+  const [lfParams, setLfParams] = useState<LfDefaults>({ ...defaults })
   const [providerParamSpecs, setProviderParamSpecs] = useState<ProviderParamSpec[]>([])
   const [inputFile, setInputFile] = useState<string | null>(saved?.inputFile ?? null)
   const [outputBaseName, setOutputBaseName] = useState(saved?.outputBaseName ?? '')
-  const [iidmVersion, setIidmVersion] = useState(saved?.iidmVersion ?? '1.5')
+  const [iidmVersion, setIidmVersion] = useState('1.5')
   const [running, setRunning] = useState(false)
   const [result, setResult] = useState<LfResult | null>(initialResult)
   const [error, setError] = useState<string | null>(null)
-  const [keepDebugFiles, setKeepDebugFiles] = useState(saved?.keepDebugFiles ?? false)
+  const [keepDebugFiles, setKeepDebugFiles] = useState(false)
 
-  // Persist state across navigation
+  // Serialised copy of what the server is known to hold. Null until the saved
+  // settings have actually been read back, and the save effect below refuses to
+  // write while it is null or unchanged. Both guards matter: a panel spends its
+  // first moments holding nothing but the built-in defaults, so a write in that
+  // window — on every mount, or after a failed read — would overwrite the saved
+  // settings with defaults, which is exactly what made them vanish on reload.
+  const persisted = useRef<string | null>(null)
+  // The write the debounce timer is waiting to send, kept here so unmounting
+  // mid-debounce flushes it rather than dropping the user's last edit.
+  const pendingParams = useRef<string | null>(null)
+
+  // Persist the file selections across navigation
   useEffect(() => {
-    saveLfPanel(provider, { ac, lfParams, iidmVersion, keepDebugFiles, inputFile, outputBaseName })
-  }, [ac, lfParams, iidmVersion, keepDebugFiles, inputFile, outputBaseName]) // eslint-disable-line react-hooks/exhaustive-deps
+    saveLfSelection(provider, { inputFile, outputBaseName })
+  }, [inputFile, outputBaseName]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Provider parameters differ per provider (DynaFlow has ~11, OpenLoadFlow ~80) —
-  // fetch the spec for this specific provider rather than relying on the shared defaults.
+  // fetch the spec for this specific provider rather than relying on the shared
+  // defaults, and layer the user's saved choices on top of it. Both are fetched
+  // together so the merge happens once, in a known order: shared defaults, then
+  // this provider's spec defaults, then whatever the user last chose.
   useEffect(() => {
-    client.get<ProviderParamSpec[]>(`/loadflow/provider-parameters/${provider}`)
-      .then(r => {
-        setProviderParamSpecs(r.data)
-        const specDefaults = Object.fromEntries(r.data.map(s => [s.name, s.default]))
-        setLfParams(prev => {
-          const savedPp = prev.provider_parameters as Record<string, unknown> | undefined
-          // Spec defaults for any new params, saved user values on top
-          return { ...prev, provider_parameters: { ...specDefaults, ...(savedPp ?? {}) } }
-        })
+    Promise.all([
+      client.get<ProviderParamSpec[]>(`/loadflow/provider-parameters/${provider}`),
+      client.get<{ parameters: SavedLfParams }>(`/loadflow/saved-parameters/${provider}`)
+        .catch(() => ({ data: { parameters: {} as SavedLfParams } })),
+    ])
+      .then(([specRes, savedRes]) => {
+        const specs = specRes.data
+        const savedParams = savedRes.data.parameters ?? {}
+        setProviderParamSpecs(specs)
+        const specDefaults = Object.fromEntries(specs.map(s => [s.name, s.default]))
+        const savedPp = (savedParams.lfParams?.provider_parameters as Record<string, unknown>) ?? {}
+        const restored: Required<SavedLfParams> = {
+          ac: savedParams.ac ?? true,
+          lfParams: {
+            ...defaults,
+            ...(savedParams.lfParams ?? {}),
+            // Spec defaults for any param the saved set predates, user values on top
+            provider_parameters: { ...specDefaults, ...savedPp },
+          },
+          iidmVersion: savedParams.iidmVersion ?? '1.5',
+          keepDebugFiles: savedParams.keepDebugFiles ?? false,
+        }
+        setAc(restored.ac)
+        setLfParams(restored.lfParams)
+        setIidmVersion(restored.iidmVersion)
+        setKeepDebugFiles(restored.keepDebugFiles)
+        // Arms the save effect, and tells it this state came from the server so
+        // it has nothing to write yet. Set after the setState calls, but React
+        // renders them later, so the effect always sees it.
+        persisted.current = serializeLfParams(restored)
       })
+      // Deliberately left un-armed on failure: a panel that could not read its
+      // saved settings must not write anything over them.
       .catch(() => {})
-  }, [provider])
+  }, [provider]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Persist the parameters to disk, but only once they differ from what the
+  // server already has — merely opening the page, or navigating back to it,
+  // must not write. Debounced, because dragging a number input would otherwise
+  // fire a write per keystroke.
+  useEffect(() => {
+    if (persisted.current === null) return
+    const snapshot = serializeLfParams({ ac, lfParams, iidmVersion, keepDebugFiles })
+    if (snapshot === persisted.current) { pendingParams.current = null; return }
+    pendingParams.current = snapshot
+    const timer = setTimeout(() => {
+      pendingParams.current = null
+      persisted.current = snapshot
+      client.put(`/loadflow/saved-parameters/${provider}`, { parameters: JSON.parse(snapshot) })
+        .catch(() => {})
+    }, 500)
+    return () => clearTimeout(timer)
+  }, [ac, lfParams, iidmVersion, keepDebugFiles]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Declared after the debounce effect so React runs its cleanup first, leaving
+  // any cancelled write in the ref for this one to flush.
+  useEffect(() => () => {
+    const p = pendingParams.current
+    if (p) client.put(`/loadflow/saved-parameters/${provider}`, { parameters: JSON.parse(p) }).catch(() => {})
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Drop the saved settings and go back to what the server reports as default.
+  const handleResetParams = async () => {
+    const reset: Required<SavedLfParams> = {
+      ac: true,
+      lfParams: {
+        ...defaults,
+        provider_parameters: Object.fromEntries(providerParamSpecs.map(s => [s.name, s.default])),
+      },
+      iidmVersion: '1.5',
+      keepDebugFiles: false,
+    }
+    // Record the reset state as already persisted so the save effect stays
+    // quiet: writing the defaults straight back would pin them and mask any
+    // later change in pypowsybl's own defaults.
+    persisted.current = serializeLfParams(reset)
+    pendingParams.current = null
+    setAc(reset.ac)
+    setLfParams(reset.lfParams)
+    setIidmVersion(reset.iidmVersion)
+    setKeepDebugFiles(reset.keepDebugFiles)
+    await client.delete(`/loadflow/saved-parameters/${provider}`).catch(() => {})
+  }
 
   const toBaseName = (n: string) =>
     n.replace(/\.(iidm|xiidm|xml)$/i, '') + (provider === 'DynaFlow' ? '_DynaFlow' : '_lf')
@@ -787,6 +900,14 @@ function LfPanel({
                   enumOptions={enumOptions} defaults={defaults}
                   providerParamSpecs={providerParamSpecs}
                 />
+                <Space style={{ marginTop: 12 }}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    These settings are saved automatically and reused the next time you open the application.
+                  </Text>
+                  <Button size="small" icon={<UndoOutlined />} onClick={handleResetParams}>
+                    Reset to defaults
+                  </Button>
+                </Space>
               </>
             ),
           },

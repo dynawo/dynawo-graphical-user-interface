@@ -26,7 +26,7 @@ from backend.user_config import (
     get_local_executables,
     load_user_config,
     remove_local_executable,
-    save_user_config,
+    update_user_config,
 )
 
 router = APIRouter(tags=["dynawo_version"])
@@ -137,7 +137,7 @@ def use_version(os_key: str, version: str, session: UserSession = Depends(get_se
     if not exe:
         raise HTTPException(status_code=404, detail="dynawo.sh not found in extracted folder")
     session.dynawo_executable = exe
-    save_user_config({**load_user_config(), "dynawo_executable": exe})
+    update_user_config(lambda cfg: cfg.__setitem__("dynawo_executable", exe))
     return {"exe": exe}
 
 
