@@ -10,7 +10,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Alert, Badge, Button, Checkbox, Collapse, Flex, Input, Popconfirm, Select, Space, Tag, Tooltip, Typography,
+  Alert, Badge, Button, Checkbox, Collapse, Flex, Input, Modal, Popconfirm, Select, Space, Tag, Tooltip, Typography,
 } from 'antd'
 import { CaretRightOutlined, CheckSquareOutlined, CopyOutlined, DeleteOutlined, PlusOutlined, RedoOutlined, RollbackOutlined, SaveOutlined } from '@ant-design/icons'
 import { List, type RowComponentProps } from 'react-window'
@@ -20,9 +20,48 @@ const { Title, Text } = Typography
 
 interface CurveEntry  { variable: string; active: boolean; extra?: boolean }
 interface CurveGroup  { model: string; lib: string; curves: CurveEntry[] }
-interface ListResp    { crv_file: string; modified: boolean; groups: CurveGroup[]; dyd_models: Record<string, string> }
+interface ListResp    { crv_file: string; jobs_file: string | null; modified: boolean; groups: CurveGroup[]; dyd_models: Record<string, string> }
 interface CurveChange { model: string; variable: string; action: 'added' | 'removed' }
-interface LogEntry    { timestamp: string; crv_file: string; changes: CurveChange[] }
+interface LogEntry    { id: string; timestamp: string; crv_file: string; changes: CurveChange[] }
+
+// One editable target per jobs file: the .crv that job's <curves inputFile="…">
+// points at. Two jobs may share one .crv (shared_with says so), and a job may
+// link none at all (crv_file null) — the page then offers to create it.
+interface Target      { jobs_file: string; crv_file: string | null; crv_ref: string | null; curve_count: number; shared_with: string[] }
+interface TargetsResp { targets: Target[]; orphan_crv: string | null }
+interface ApplyResult { jobs_file: string | null; crv_file: string | null; added: number; removed: number; skipped: string[]; note?: string | null }
+interface ApplyResp   { changed: number; results: ApplyResult[] }
+
+// Every curves endpoint acts on the .crv of one job; omitting the parameter
+// falls back to the session's single .crv (a session with one job, as before).
+function scoped(jobsFile: string | null) {
+  return jobsFile ? { params: { jobs_file: jobsFile } } : undefined
+}
+
+// How many curves the job's .crv currently defines — spelled out, since the
+// number sits next to a filename where a bare "(12)" reads like a version.
+function countLabel(n: number): string {
+  if (n === 0) return 'no curves yet'
+  return `${n} curve${n === 1 ? '' : 's'}`
+}
+
+// The apply response carries one row per .crv file written: the edited job first,
+// then every other job the same additions and removals were replayed on.
+function describeApply(res: ApplyResp): string {
+  const [primary, ...others] = res.results
+  const parts = [`${res.changed} curve(s) updated in ${primary?.crv_file ?? 'the curves file'}.`]
+  for (const r of others) {
+    const where = r.jobs_file ?? r.crv_file ?? 'another job'
+    if (!r.crv_file) parts.push(`${where}: no curves file linked — skipped.`)
+    else if (r.added || r.removed) parts.push(`${r.crv_file}: +${r.added} / −${r.removed}.`)
+    else if (r.note) parts.push(`${r.crv_file}: ${r.note}.`)
+    if (r.skipped?.length) {
+      const shown = r.skipped.slice(0, 3).join(', ')
+      parts.push(`${r.skipped.length} curve(s) not applicable to ${where} (model absent from its .dyd): ${shown}${r.skipped.length > 3 ? '…' : ''}.`)
+    }
+  }
+  return parts.join(' ')
+}
 
 interface CatalogueEntry { lib: string; variables: string[]; parameters: string[] }
 interface CatalogueResp  { available: boolean; catalogue: Record<string, CatalogueEntry> }
@@ -38,6 +77,10 @@ function selKey(model: string, variable: string) {
 // and doesn't discard in-progress (unsaved) checkbox edits.
 interface EditCurvesCache {
   loaded: boolean
+  // The jobs file the cached state was loaded for — hydrating it under another
+  // scope would show one job's curves as if they were another's.
+  scope: string | null
+  targets: Target[]
   groups: CurveGroup[]
   serverSel: Record<string, boolean>
   crvFile: string | null
@@ -52,6 +95,8 @@ interface EditCurvesCache {
 
 const editCurvesCache: EditCurvesCache = {
   loaded: false,
+  scope: null,
+  targets: [],
   groups: [],
   serverSel: {},
   crvFile: null,
@@ -294,10 +339,26 @@ export default function EditCurves() {
   const [creating, setCreating]       = useState(false)
   const [manualModel, setManualModel] = useState('')
   const [manualVar, setManualVar]     = useState('')
+  const [targets, setTargets]         = useState<Target[]>(() => editCurvesCache.targets)
+  const [scope, setScope]             = useState<string | null>(() => editCurvesCache.scope)
+  const [targetsLoaded, setTargetsLoaded] = useState(false)
+  const [applyAll, setApplyAll]       = useState(false)
+  const [linkAllJobs, setLinkAllJobs] = useState(false)
+  const [modal, modalCtx]             = Modal.useModal()
 
-  const fetchList = async () => {
+  const fetchTargets = async (): Promise<Target[]> => {
     try {
-      const res = await client.get<ListResp>('/curves/list')
+      const res = await client.get<TargetsResp>('/curves/targets')
+      setTargets(res.data.targets)
+      return res.data.targets
+    } catch {
+      return []
+    }
+  }
+
+  const fetchList = async (jobsFile: string | null) => {
+    try {
+      const res = await client.get<ListResp>('/curves/list', scoped(jobsFile))
       setCrvFile(res.data.crv_file)
       setModified(res.data.modified)
       setGroups(res.data.groups)
@@ -314,16 +375,16 @@ export default function EditCurves() {
     }
   }
 
-  const fetchChangelog = async () => {
+  const fetchChangelog = async (jobsFile: string | null) => {
     try {
-      const res = await client.get<LogEntry[]>('/curves/changelog')
+      const res = await client.get<LogEntry[]>('/curves/changelog', scoped(jobsFile))
       setChangelog(res.data)
     } catch {}
   }
 
-  const fetchCatalogue = async () => {
+  const fetchCatalogue = async (jobsFile: string | null) => {
     try {
-      const res = await client.get<CatalogueResp>('/curves/catalogue')
+      const res = await client.get<CatalogueResp>('/curves/catalogue', scoped(jobsFile))
       // Only upgrade available; never downgrade — a transient false must not clear catalogue
       if (res.data.available) {
         setCatalogueAvailable(true)
@@ -332,9 +393,9 @@ export default function EditCurves() {
     } catch {}
   }
 
-  const fetchInitInfo = async () => {
+  const fetchInitInfo = async (jobsFile: string | null) => {
     try {
-      const res = await client.get<InitInfo>('/curves/init-info')
+      const res = await client.get<InitInfo>('/curves/init-info', scoped(jobsFile))
       setInitInfo(res.data)
       setNewCrvName(res.data.suggested_filename)
     } catch {
@@ -354,16 +415,35 @@ export default function EditCurves() {
   useEffect(() => { editCurvesCache.catalogue = catalogue }, [catalogue])
   useEffect(() => { editCurvesCache.catalogueAvailable = catalogueAvailable }, [catalogueAvailable])
   useEffect(() => { editCurvesCache.dydModels = dydModels }, [dydModels])
+  useEffect(() => { editCurvesCache.targets = targets }, [targets])
 
-  // Skip the refetch on remount only when a .crv was actually loaded — that's the case with
-  // in-progress edits worth protecting. When the last known state was "no .crv" there's nothing
-  // to lose, and re-checking lets the page pick up a .crv uploaded since the last visit (e.g. via
-  // the Upload page) instead of getting stuck showing a stale "no .crv" screen forever.
+  // Which jobs the session holds, and which .crv each one drives. Cheap enough to
+  // re-read on every visit — a job may have gained or lost its <curves> element
+  // (Upload, autoload, or a create from this very page) since the last one.
   useEffect(() => {
-    if (editCurvesCache.loaded && !editCurvesCache.noCrv) return
-    editCurvesCache.loaded = true
-    fetchList(); fetchChangelog(); fetchCatalogue()
+    fetchTargets()
+      .then(list => setScope(prev =>
+        prev && list.some(t => t.jobs_file === prev) ? prev : (list[0]?.jobs_file ?? null)))
+      .finally(() => setTargetsLoaded(true))
   }, [])
+
+  // Load the scoped .crv. Skip the refetch on remount only when a .crv was actually loaded
+  // *for this same job* — that's the case with in-progress edits worth protecting. When the
+  // last known state was "no .crv" there's nothing to lose, and re-checking lets the page pick
+  // up a .crv uploaded since the last visit (e.g. via the Upload page) instead of getting stuck
+  // showing a stale "no .crv" screen forever. Any later scope change always re-fetches.
+  const hydrated = useRef(false)
+  useEffect(() => {
+    if (!targetsLoaded) return
+    if (!hydrated.current && editCurvesCache.loaded && !editCurvesCache.noCrv && editCurvesCache.scope === scope) {
+      hydrated.current = true
+      return
+    }
+    hydrated.current = true
+    editCurvesCache.loaded = true
+    editCurvesCache.scope = scope
+    fetchList(scope); fetchChangelog(scope); fetchCatalogue(scope)
+  }, [scope, targetsLoaded])
 
   // Re-fetch catalogue whenever the editor becomes active (noCrv: true → false).
   // This is belt-and-suspenders: if the fetchCatalogue inside handleCreate returned
@@ -373,10 +453,10 @@ export default function EditCurves() {
   useEffect(() => {
     const prev = prevNoCrvRef.current
     prevNoCrvRef.current = noCrv
-    if (prev === true && !noCrv) fetchCatalogue()
-  }, [noCrv])
+    if (prev === true && !noCrv) fetchCatalogue(scope)
+  }, [noCrv, scope])
 
-  useEffect(() => { if (noCrv) fetchInitInfo() }, [noCrv])
+  useEffect(() => { if (noCrv) fetchInitInfo(scope) }, [noCrv, scope])
 
   // Augment server groups with every other DYD model that has no curves yet, so the user can
   // browse and add curves (or propagate one to sibling-lib models) across the whole network, not
@@ -401,6 +481,45 @@ export default function EditCurves() {
 
   // dirty = selection differs from what the server has (serverSel never changes without a fetchList)
   const dirty = Object.keys(selection).some(k => selection[k] !== (serverSel[k] ?? false))
+
+  const target = targets.find(t => t.jobs_file === scope) ?? null
+  const sharedWith = target?.shared_with ?? []
+
+  // Switching job reloads the editor from that job's .crv, so unapplied ticks are lost.
+  const requestScope = (next: string) => {
+    if (next === scope) return
+    if (!dirty) { setScope(next); return }
+    modal.confirm({
+      title: 'Discard unsaved curve changes?',
+      content: `Changes to ${crvFile ?? 'the current curves file'} have not been applied yet and will be lost.`,
+      okText: 'Discard and switch',
+      okButtonProps: { danger: true },
+      cancelText: 'Stay',
+      onOk: () => setScope(next),
+    })
+  }
+
+  const jobSelector = targets.length > 1 ? (
+    <Flex align="center" gap={8} wrap style={{ marginBottom: 12 }}>
+      <Text strong>Job</Text>
+      <Select
+        value={scope ?? undefined}
+        style={{ minWidth: 340 }}
+        onChange={requestScope}
+        options={targets.map(t => ({
+          value: t.jobs_file,
+          label: t.crv_file
+            ? `${t.jobs_file} → ${t.crv_file} (${countLabel(t.curve_count)})`
+            : `${t.jobs_file} → no curves file`,
+        }))}
+      />
+      {sharedWith.length > 0 && (
+        <Tooltip title={`${crvFile} is also the curves file of ${sharedWith.join(', ')} — editing it here changes those jobs too.`}>
+          <Tag color="orange">shared with {sharedWith.length} other job{sharedWith.length > 1 ? 's' : ''}</Tag>
+        </Tooltip>
+      )}
+    </Flex>
+  ) : null
 
   const handleAddVariable = (model: string, variable: string) => {
     setGroups(prev => {
@@ -428,10 +547,15 @@ export default function EditCurves() {
           const sep = k.indexOf('::')
           return { model: k.slice(0, sep), variable: k.slice(sep + 2) }
         })
-      const res = await client.put<{ changed: number }>('/curves/apply', { curves })
-      await fetchList()
-      await fetchChangelog()
-      setSuccess(`${res.data.changed} curve(s) updated.`)
+      const res = await client.put<ApplyResp>('/curves/apply', {
+        curves,
+        jobs_file: scope,
+        apply_to_all: applyAll,
+      })
+      await fetchList(scope)
+      await fetchChangelog(scope)
+      await fetchTargets()
+      setSuccess(describeApply(res.data))
     } catch (e: any) {
       setError(e.response?.data?.detail ?? 'Apply failed')
     } finally {
@@ -441,10 +565,11 @@ export default function EditCurves() {
 
   const handleRestore = async () => {
     try {
-      await client.post('/curves/restore')
-      await fetchList()
-      await fetchChangelog()
-      setSuccess('Curves file restored to original.')
+      await client.post('/curves/restore', null, scoped(scope))
+      await fetchList(scope)
+      await fetchChangelog(scope)
+      await fetchTargets()
+      setSuccess(`${crvFile ?? 'Curves file'} restored to original.`)
     } catch (e: any) {
       setError(e.response?.data?.detail ?? 'Restore failed')
     }
@@ -454,15 +579,20 @@ export default function EditCurves() {
     const name = newCrvName.trim() || 'curves.crv'
     setCreating(true); setError(null)
     try {
-      await client.post('/curves/init', { crv_filename: name })
+      // Link the new file into the selected job only, unless the user asked for every job.
+      await client.post('/curves/init', {
+        crv_filename: name,
+        jobs_file: linkAllJobs ? null : scope,
+      })
+      await fetchTargets()
 
       // Fetch list and catalogue in parallel, then apply ALL state updates in one
       // synchronous block so React batches them into a single render.  This is the
       // only reliable way to guarantee that displayGroups has catalogue data at the
       // exact moment noCrv flips to false.
       const [listRes, catRes] = await Promise.all([
-        client.get<ListResp>('/curves/list'),
-        client.get<CatalogueResp>('/curves/catalogue').catch(() => null),
+        client.get<ListResp>('/curves/list', scoped(scope)),
+        client.get<CatalogueResp>('/curves/catalogue', scoped(scope)).catch(() => null),
       ])
 
       // ── all synchronous from here → single React batch ──────────────────────
@@ -484,7 +614,7 @@ export default function EditCurves() {
       setNoCrv(false)
       // ────────────────────────────────────────────────────────────────────────
 
-      await fetchChangelog()
+      await fetchChangelog(scope)
     } catch (e: any) {
       setError(e.response?.data?.detail ?? 'Failed to create curves file')
     } finally {
@@ -612,17 +742,18 @@ export default function EditCurves() {
   }
 
   const handleClearLog = async () => {
-    await client.delete('/curves/changelog')
-    await fetchChangelog()
+    await client.delete('/curves/changelog', scoped(scope))
+    await fetchChangelog(scope)
   }
 
   const handleRevert = async (entry: LogEntry) => {
     try {
       const res = await client.post<{ ok: boolean; warned: boolean }>(
-        `/curves/changelog/revert/${encodeURIComponent(entry.timestamp)}`
+        `/curves/changelog/revert/${encodeURIComponent(entry.id)}`
       )
-      await fetchList()
-      await fetchChangelog()
+      await fetchList(scope)
+      await fetchChangelog(scope)
+      await fetchTargets()
       if (res.data.warned)
         setSuccess('Reverted — note: later entries modified the same curves; the log may be inconsistent.')
       else
@@ -635,14 +766,18 @@ export default function EditCurves() {
   if (noCrv) {
     return (
       <div style={{ maxWidth: 600 }}>
+        {modalCtx}
         <Title level={3}>Edit Curves</Title>
+        {jobSelector}
         {error && (
           <Alert type="error" description={error} style={{ marginBottom: 12 }}
             closable={{ onClose: () => setError(null) }} />
         )}
         <Alert
           type="info"
-          description="No .crv file is linked in this session. Create one to start defining output curves."
+          description={scope
+            ? `${scope} links no .crv file. Create one to start defining its output curves.`
+            : 'No .crv file is linked in this session. Create one to start defining output curves.'}
           style={{ marginBottom: 16 }}
         />
         <Text style={{ display: 'block', marginBottom: 6 }}>Filename</Text>
@@ -657,9 +792,22 @@ export default function EditCurves() {
             Create
           </Button>
         </Space.Compact>
+        {targets.length > 1 && (
+          <Checkbox
+            checked={linkAllJobs}
+            onChange={e => setLinkAllJobs(e.target.checked)}
+            style={{ marginTop: 10 }}
+          >
+            <Text style={{ fontSize: 12 }}>
+              Link this curves file in every job (they will then share one .crv)
+            </Text>
+          </Checkbox>
+        )}
         {initInfo?.has_jobs && (
           <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 8 }}>
-            The .jobs file will be updated to reference this curves file.
+            {linkAllJobs || !scope
+              ? 'The .jobs file(s) will be updated to reference this curves file.'
+              : `${scope} will be updated to reference this curves file.`}
           </Text>
         )}
       </div>
@@ -668,7 +816,9 @@ export default function EditCurves() {
 
   return (
     <div style={{ maxWidth: 900 }}>
+      {modalCtx}
       <Title level={3}>Edit Curves</Title>
+      {jobSelector}
 
       {modified && (
         <Alert
@@ -694,7 +844,14 @@ export default function EditCurves() {
           closable={{ onClose: () => setError(null) }} />
       )}
 
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginBottom: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+        {targets.length > 1 && (
+          <Tooltip title="Replay the same additions and removals on every other job's .crv file. Their own extra curves are kept, and a curve whose model isn't in a job's .dyd is skipped there.">
+            <Checkbox checked={applyAll} onChange={e => setApplyAll(e.target.checked)}>
+              <Text style={{ fontSize: 13 }}>Apply to all jobs</Text>
+            </Checkbox>
+          </Tooltip>
+        )}
         {catalogueAvailable && (
           <Tooltip title="Adds every variable of every model. Parameters are added per model.">
             <Button icon={<CheckSquareOutlined />} onClick={handleSelectAllCatalogue}>
