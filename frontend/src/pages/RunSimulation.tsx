@@ -290,13 +290,17 @@ function PlotlyChart({ traces, axes, height }: { traces: Plotly.Data[]; axes: Ax
 
 interface CurvesProps {
   runs: RunSummary[]
-  jobsFile: string
 }
 
-function CurvesBuilder({ runs, jobsFile }: CurvesProps) {
+function CurvesBuilder({ runs }: CurvesProps) {
   // Curves are attempted for any finished run, even a failed/diverged one — Dynawo
   // normally still writes out the curves file up to the point of divergence.
-  const okRuns = runs.filter(r => r.returncode !== null && r.jobs_file === jobsFile)
+  // Runs of *every* jobs file are offered, so curves produced by two different
+  // simulations can be compared on the same plot. Signal columns are keyed by
+  // "<model>_<variable>", so a signal both jobs export lands on a single entry
+  // in the tree and each selected run contributes its own trace; a signal only
+  // one job exports simply has no trace for the runs that lack it.
+  const okRuns = runs.filter(r => r.returncode !== null)
 
   // Restore user selections from sessionStorage (survives navigation & HMR)
   const [saved]           = useState(loadCurves)
@@ -338,16 +342,31 @@ function CurvesBuilder({ runs, jobsFile }: CurvesProps) {
   const [dcFactor, setDcFactor] = useState<string>('1')
   const [dcName, setDcName] = useState<string>('')
 
+  // Run ids already offered in the list. A run that shows up later — a
+  // simulation that just finished, whichever jobs file it belongs to — is
+  // auto-selected so its curves appear without a trip to the checkbox, while
+  // the ids present on the first render are left to the restored selection.
+  const seenRuns = useRef<Set<number> | null>(null)
+  const autoSelectNewRuns = useCallback((list: RunSummary[]) => {
+    const ids = list.map(r => r.run_id)
+    const seen = seenRuns.current
+    seenRuns.current = new Set(ids)
+    setSelectedRuns(prev => {
+      if (seen === null) return prev.size > 0 ? prev : new Set(ids)
+      const fresh = ids.filter(id => !seen.has(id))
+      if (fresh.length === 0) return prev
+      const s = new Set(prev)
+      fresh.forEach(id => s.add(id))
+      return s
+    })
+  }, [])
+
   // Load curves data and info for each new ok run
   useEffect(() => {
     if (okRuns.length === 0) return
     const missing = okRuns.filter(run => !curvesCache.runData[run.run_id])
     if (missing.length === 0) {
-      // Data already in store — ensure selectedRuns covers these runs
-      setSelectedRuns(prev => {
-        const hasMatch = okRuns.some(r => prev.has(r.run_id))
-        return hasMatch ? prev : new Set(okRuns.map(r => r.run_id))
-      })
+      autoSelectNewRuns(okRuns)
       return
     }
 
@@ -376,10 +395,7 @@ function CurvesBuilder({ runs, jobsFile }: CurvesProps) {
 
     Promise.all([...dataPromises, infoPromise]).finally(() => setFetchingCurves(false))
 
-    setSelectedRuns(prev => {
-      const hasMatch = okRuns.some(r => prev.has(r.run_id))
-      return hasMatch ? prev : new Set(okRuns.map(r => r.run_id))
-    })
+    autoSelectNewRuns(okRuns)
   }, [okRuns.length])
 
   const dragging = useRef(false)
@@ -407,6 +423,15 @@ function CurvesBuilder({ runs, jobsFile }: CurvesProps) {
   // Union of columns across all runs so signals added in later runs are visible
   const allCols = [...new Set(Object.values(runData).flatMap(d => Object.keys(d.signals)))]
   const multiRun = selectedRuns.size > 1
+
+  // Runs are listed grouped by their jobs file so it stays obvious which
+  // simulation each one came from once several jobs are plotted together.
+  const runsByJobs: Record<string, RunSummary[]> = {}
+  for (const r of okRuns) (runsByJobs[r.jobs_file] ??= []).push(r)
+  const multiJobs = Object.keys(runsByJobs).length > 1
+  // Default run labels ("Run 3") don't say which jobs file produced them.
+  const runName = (run: RunSummary) =>
+    multiJobs ? `${run.jobs_file.replace(/\.jobs$/i, '')} — ${run.label}` : run.label
 
   // Group signals by model — skip columns with no crv info
   const byModel: Record<string, string[]> = {}
@@ -447,7 +472,7 @@ function CurvesBuilder({ runs, jobsFile }: CurvesProps) {
       traces.push({
         type: 'scatter', mode: 'lines',
         x: data.time, y: data.signals[col],
-        name: multiRun ? `${run.label} — ${label(col, curvesInfo)}` : label(col, curvesInfo),
+        name: multiRun ? `${runName(run)} — ${label(col, curvesInfo)}` : label(col, curvesInfo),
         line: { color: COLORS[colorIdx % COLORS.length], dash },
         xaxis: xRef(slot), yaxis: yRef(slot, placementOf(col).side),
       } as Plotly.Data)
@@ -463,7 +488,7 @@ function CurvesBuilder({ runs, jobsFile }: CurvesProps) {
         traces.push({
           type: 'scatter', mode: 'lines',
           x: data.time, y: vals,
-          name: multiRun ? `${run.label} — ${dc.name}` : dc.name,
+          name: multiRun ? `${runName(run)} — ${dc.name}` : dc.name,
           line: { color: COLORS[colorIdx % COLORS.length], dash: dashStyles[key] ?? 'solid' },
           xaxis: xRef(slot), yaxis: yRef(slot, placementOf(key).side),
         } as Plotly.Data)
@@ -559,19 +584,36 @@ function CurvesBuilder({ runs, jobsFile }: CurvesProps) {
       <div style={{ display: 'flex', gap: 0 }}>
         {/* Left panel */}
         <div style={{ width: panelWidth, flexShrink: 0, minWidth: 220, maxWidth: 640 }}>
-          <Text strong style={{ fontSize: 13 }}>Runs</Text>
-          {okRuns.map(run => (
-            <div key={run.run_id}>
-              <Checkbox
-                checked={selectedRuns.has(run.run_id)}
-                onChange={e => setSelectedRuns(prev => {
-                  const s = new Set(prev)
-                  e.target.checked ? s.add(run.run_id) : s.delete(run.run_id)
-                  return s
-                })}
-              >
-                <Text style={{ fontSize: 12 }}>{run.label}</Text>
-              </Checkbox>
+          <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+            <Text strong style={{ fontSize: 13 }}>Runs</Text>
+            {okRuns.length > 1 && (
+              <Space size={4}>
+                <Button size="small" onClick={() => setSelectedRuns(new Set(okRuns.map(r => r.run_id)))}>All</Button>
+                <Button size="small" onClick={() => setSelectedRuns(new Set())}>None</Button>
+              </Space>
+            )}
+          </Space>
+          {Object.entries(runsByJobs).map(([jobs, jobsRuns]) => (
+            <div key={jobs}>
+              {multiJobs && (
+                <Text type="secondary" style={{ fontSize: 11, display: 'block', marginTop: 6 }} title={jobs}>
+                  {jobs}
+                </Text>
+              )}
+              {jobsRuns.map(run => (
+                <div key={run.run_id}>
+                  <Checkbox
+                    checked={selectedRuns.has(run.run_id)}
+                    onChange={e => setSelectedRuns(prev => {
+                      const s = new Set(prev)
+                      e.target.checked ? s.add(run.run_id) : s.delete(run.run_id)
+                      return s
+                    })}
+                  >
+                    <Text style={{ fontSize: 12 }}>{run.label}</Text>
+                  </Checkbox>
+                </div>
+              ))}
             </div>
           ))}
 
@@ -1046,9 +1088,9 @@ export default function RunSimulation() {
         </>
       )}
 
-      {/* Curves */}
-      {selectedJobs && jobRuns.some(r => r.returncode !== null) && (
-        <CurvesBuilder runs={jobRuns} jobsFile={selectedJobs} />
+      {/* Curves — every finished run, whichever jobs file produced it */}
+      {runs.some(r => r.returncode !== null) && (
+        <CurvesBuilder runs={runs} />
       )}
     </div>
   )
