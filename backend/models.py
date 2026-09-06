@@ -8,6 +8,7 @@
 # SPDX-License-Identifier: MPL-2.0
 #
 
+import uuid
 from dataclasses import dataclass, field
 
 
@@ -77,6 +78,10 @@ class CrvChangeLogEntry:
     timestamp: str
     crv_file: str
     changes: list[CurveChange]
+    # Applying an edit to several jobs at once writes one entry per .crv file in
+    # the same second, so the timestamp no longer identifies an entry — reverting
+    # needs an id of its own.
+    entry_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
 
 
 @dataclass
