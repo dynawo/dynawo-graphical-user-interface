@@ -1,0 +1,172 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<events>
+
+  <eventFamily scope="network" label="Network object"
+               description="Object simulated by Dynawo's internal network model, picked by its IIDM id.">
+
+    <event id="network_line_disconnection" appliesTo="LINE"
+           label="Line disconnection" lib="EventQuadripoleDisconnection">
+      <automatic>true</automatic>
+      <connectPattern valueVar1="state" valueVar2="state"/>
+      <destination to="NETWORK"/>
+    </event>
+
+    <event id="network_line_connection" appliesTo="LINE"
+           label="Line reconnection" lib="EventQuadripoleConnection">
+      <automatic>true</automatic>
+      <connectPattern valueVar1="state" valueVar2="state"/>
+      <destination to="NETWORK"/>
+    </event>
+
+    <event id="network_transformer_disconnection" appliesTo="TRANSFORMER"
+           label="Transformer disconnection" lib="EventQuadripoleDisconnection">
+      <automatic>true</automatic>
+      <connectPattern valueVar1="state" valueVar2="state"/>
+      <destination to="NETWORK"/>
+    </event>
+
+    <event id="network_transformer_connection" appliesTo="TRANSFORMER"
+           label="Transformer reconnection" lib="EventQuadripoleConnection">
+      <automatic>true</automatic>
+      <connectPattern valueVar1="state" valueVar2="state"/>
+      <destination to="NETWORK"/>
+    </event>
+
+    <event id="network_load_disconnection" appliesTo="LOAD"
+           label="Load disconnection" lib="EventConnectedStatus">
+      <automatic>true</automatic>
+      <connectPattern valueVar1="state" valueVar2="state"/>
+      <destination to="NETWORK"/>
+      <fixedParameter pattern="open" value="true"/>
+    </event>
+
+    <event id="network_load_connection" appliesTo="LOAD"
+           label="Load connection" lib="EventConnectedStatus">
+      <automatic>true</automatic>
+      <connectPattern valueVar1="state" valueVar2="state"/>
+      <destination to="NETWORK"/>
+      <fixedParameter pattern="open" value="false"/>
+    </event>
+
+    <event id="network_generator_disconnection" appliesTo="GENERATOR"
+           label="Generator disconnection" lib="EventConnectedStatus">
+      <automatic>true</automatic>
+      <connectPattern valueVar1="state" valueVar2="state"/>
+      <destination to="NETWORK"/>
+      <fixedParameter pattern="open" value="true"/>
+    </event>
+
+    <event id="network_generator_connection" appliesTo="GENERATOR"
+           label="Generator connection" lib="EventConnectedStatus">
+      <automatic>true</automatic>
+      <connectPattern valueVar1="state" valueVar2="state"/>
+      <destination to="NETWORK"/>
+      <fixedParameter pattern="open" value="false"/>
+    </event>
+
+    <event id="network_shunt_disconnection" appliesTo="SHUNT"
+           label="Shunt disconnection" lib="EventConnectedStatus">
+      <automatic>true</automatic>
+      <connectPattern valueVar1="state" valueVar2="state"/>
+      <destination to="NETWORK"/>
+      <fixedParameter pattern="open" value="true"/>
+    </event>
+
+    <event id="network_shunt_connection" appliesTo="SHUNT"
+           label="Shunt connection" lib="EventConnectedStatus">
+      <automatic>true</automatic>
+      <connectPattern valueVar1="state" valueVar2="state"/>
+      <destination to="NETWORK"/>
+      <fixedParameter pattern="open" value="false"/>
+    </event>
+
+    <event id="network_svc_disconnection" appliesTo="SVC"
+           label="SVC disconnection" lib="EventConnectedStatus">
+      <automatic>true</automatic>
+      <connectPattern valueVar1="state" valueVar2="state"/>
+      <destination to="NETWORK"/>
+      <fixedParameter pattern="open" value="true"/>
+    </event>
+
+    <event id="network_svc_connection" appliesTo="SVC"
+           label="SVC connection" lib="EventConnectedStatus">
+      <automatic>true</automatic>
+      <connectPattern valueVar1="state" valueVar2="state"/>
+      <destination to="NETWORK"/>
+      <fixedParameter pattern="open" value="false"/>
+    </event>
+
+    <event id="network_dangling_line_disconnection" appliesTo="DANGLING_LINE"
+           label="Dangling line disconnection" lib="EventConnectedStatus">
+      <automatic>true</automatic>
+      <connectPattern valueVar1="state" valueVar2="state"/>
+      <destination to="NETWORK"/>
+      <fixedParameter pattern="open" value="true"/>
+    </event>
+
+    <event id="network_dangling_line_connection" appliesTo="DANGLING_LINE"
+           label="Dangling line connection" lib="EventConnectedStatus">
+      <automatic>true</automatic>
+      <connectPattern valueVar1="state" valueVar2="state"/>
+      <destination to="NETWORK"/>
+      <fixedParameter pattern="open" value="false"/>
+    </event>
+
+    <event id="network_hvdc_disconnection" appliesTo="HVDC"
+           label="HVDC disconnection" lib="EventConnectedStatus">
+      <automatic>true</automatic>
+      <connectPattern valueVar1="state" valueVar2="state1"/>
+      <connectPattern valueVar1="state" valueVar2="state2"/>
+      <destination to="NETWORK"/>
+      <fixedParameter pattern="open" value="true"/>
+    </event>
+
+    <event id="network_hvdc_connection" appliesTo="HVDC"
+           label="HVDC connection" lib="EventConnectedStatus">
+      <automatic>true</automatic>
+      <connectPattern valueVar1="state" valueVar2="state1"/>
+      <connectPattern valueVar1="state" valueVar2="state2"/>
+      <destination to="NETWORK"/>
+      <fixedParameter pattern="open" value="false"/>
+    </event>
+
+  </eventFamily>
+
+  <eventFamily scope="dynamic" label="Dynamic model"
+               description="Object backed by a blackBoxModel of the .dyd, picked by its model id.">
+
+    <event id="dynamic_disconnection"
+           label="Disconnection" lib="EventSetPointBoolean">
+      <automatic>true</automatic>
+      <connectPattern valueVar1="state" valueVar2="switchOffSignal2"/>
+      <destination to="MODEL"/>
+      <fixedParameter pattern="stateEvent" value="true"/>
+    </event>
+
+    <event id="dynamic_reconnection"
+           label="Reconnection" lib="EventSetPointBoolean">
+      <automatic>true</automatic>
+      <connectPattern valueVar1="state" valueVar2="switchOffSignal2"/>
+      <destination to="MODEL"/>
+      <fixedParameter pattern="stateEvent" value="false"/>
+    </event>
+
+    <event id="dynamic_disconnection_load_restorative" forLib="DYNModelLoadRestorativeWithLimits"
+           label="Disconnection" lib="EventSetPointBoolean">
+      <automatic>true</automatic>
+      <connectPattern valueVar1="state" valueVar2="switchOff2"/>
+      <destination to="MODEL"/>
+      <fixedParameter pattern="stateEvent" value="true"/>
+    </event>
+
+    <event id="dynamic_reconnection_load_restorative" forLib="DYNModelLoadRestorativeWithLimits"
+           label="Reconnection" lib="EventSetPointBoolean">
+      <automatic>true</automatic>
+      <connectPattern valueVar1="state" valueVar2="switchOff2"/>
+      <destination to="MODEL"/>
+      <fixedParameter pattern="stateEvent" value="false"/>
+    </event>
+
+  </eventFamily>
+
+</events>
