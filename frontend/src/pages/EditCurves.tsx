@@ -91,6 +91,10 @@ interface EditCurvesCache {
   catalogue: Record<string, CatalogueEntry>
   catalogueAvailable: boolean
   dydModels: Record<string, string>
+  // The session's files as they were when this cache was filled. A .dyd added
+  // since (the Events page writes one) means the model list below is out of
+  // date, and keeping the unsaved edits is no longer worth showing stale models.
+  filesDigest: string | null
 }
 
 const editCurvesCache: EditCurvesCache = {
@@ -107,6 +111,7 @@ const editCurvesCache: EditCurvesCache = {
   catalogue: {},
   catalogueAvailable: false,
   dydModels: {},
+  filesDigest: null,
 }
 
 // ── Virtualized model list ──────────────────────────────────────────────────
@@ -433,17 +438,28 @@ export default function EditCurves() {
   // up a .crv uploaded since the last visit (e.g. via the Upload page) instead of getting stuck
   // showing a stale "no .crv" screen forever. Any later scope change always re-fetches.
   const hydrated = useRef(false)
+  // Read before deciding whether the cache may be reused: it says whether the
+  // session's files still are the ones it was filled from.
+  const [filesDigest, setFilesDigest] = useState<string | null>(null)
   useEffect(() => {
-    if (!targetsLoaded) return
-    if (!hydrated.current && editCurvesCache.loaded && !editCurvesCache.noCrv && editCurvesCache.scope === scope) {
+    client.get<{ digest: string }>('/files/state')
+      .then(res => setFilesDigest(res.data.digest))
+      .catch(() => setFilesDigest(''))
+  }, [])
+
+  useEffect(() => {
+    if (!targetsLoaded || filesDigest === null) return
+    if (!hydrated.current && editCurvesCache.loaded && !editCurvesCache.noCrv
+        && editCurvesCache.scope === scope && editCurvesCache.filesDigest === filesDigest) {
       hydrated.current = true
       return
     }
     hydrated.current = true
     editCurvesCache.loaded = true
     editCurvesCache.scope = scope
+    editCurvesCache.filesDigest = filesDigest
     fetchList(scope); fetchChangelog(scope); fetchCatalogue(scope)
-  }, [scope, targetsLoaded])
+  }, [scope, targetsLoaded, filesDigest])
 
   // Re-fetch catalogue whenever the editor becomes active (noCrv: true → false).
   // This is belt-and-suspenders: if the fetchCatalogue inside handleCreate returned

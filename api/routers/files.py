@@ -8,10 +8,11 @@
 # SPDX-License-Identifier: MPL-2.0
 #
 
+import hashlib
 import io
 import logging
-import zipfile
 import os
+import zipfile
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
@@ -118,6 +119,32 @@ def list_files(session: UserSession = Depends(get_session)):
         {"name": name, "size": meta["size"], "ftype": meta["ftype"]}
         for name, meta in session.uploaded_files_info.items()
     ]
+
+
+@router.get("/state")
+def files_state(session: UserSession = Depends(get_session)):
+    """A digest of the session's files, for pages that cache what they read.
+
+    A page keeping state across navigation (the curves editor keeps unsaved
+    edits) cannot tell a revisit from a session that changed underneath it —
+    another page may have added a .dyd, or a file may have been edited. Reading
+    this first answers that in one request: same digest, the cache still
+    describes the session; different, it has to be read again.
+
+    Built from what identifies a file's content cheaply — its name, its size and
+    its modification time — over every file of the session, so it moves on an
+    upload, a deletion and an in-place edit alike.
+    """
+    parts = []
+    for name in sorted(session.uploaded_files_info):
+        path = session.session_manager.get_path(name)
+        try:
+            stat = os.stat(path)
+            parts.append(f"{name}:{stat.st_size}:{stat.st_mtime_ns}")
+        except OSError:
+            parts.append(f"{name}:missing")
+    digest = hashlib.sha1("|".join(parts).encode()).hexdigest()
+    return {"digest": digest, "files": len(parts)}
 
 
 @router.delete("/{filename:path}")

@@ -14,7 +14,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 
-from backend.models import ChangeLogEntry, CrvChangeLogEntry, RunRecord
+from backend.models import ChangeLogEntry, CrvChangeLogEntry, RunRecord, StagedEvent
 from backend.session_manager import SessionDir, SessionManager
 from backend.user_config import get_default_executable
 
@@ -73,6 +73,9 @@ class UserSession:
 
     # Last security analysis result (for re-display on page revisit)
     security_analysis_result: dict | None = None
+
+    # Events composed on the Events page but not written yet — see StagedEvent.
+    staged_events: list[StagedEvent] = field(default_factory=list)
 
     # Parameter change logs
     par_change_log: list[ChangeLogEntry] = field(default_factory=list)

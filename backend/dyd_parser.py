@@ -38,3 +38,23 @@ def parse_dyd(content: bytes) -> dict[str, dict]:
                 "parId":     bbm.get("parId", ""),
             }
     return models
+
+
+def parse_dyd_connections(content: bytes) -> list[dict]:
+    """Return [{id1, var1, id2, var2}] for every <connect> of a .dyd.
+
+    The counterpart of parse_dyd: a blackBoxModel says what a model is, a
+    connect says what it acts on. Reading an events file back needs both — the
+    model gives the library and its parameter set, the connect gives the object
+    the event was applied to.
+    """
+    root = ET.fromstring(content)
+    return [
+        {
+            "id1":  c.get("id1", ""),
+            "var1": c.get("var1", ""),
+            "id2":  c.get("id2", ""),
+            "var2": c.get("var2", ""),
+        }
+        for c in root.findall(f".//{{{_NS}}}connect")
+    ]

@@ -11,7 +11,7 @@
 import { useEffect, useState } from 'react'
 import { BrowserRouter, useLocation, useNavigate, Route, Routes } from 'react-router-dom'
 import { ConfigProvider, Layout, Menu, Button, Popconfirm, theme, Tooltip, Typography } from 'antd'
-import { ApartmentOutlined, ClearOutlined, CloudUploadOutlined, DownloadOutlined, EditOutlined, InfoCircleOutlined, LineChartOutlined, MoonOutlined, PlayCircleOutlined, SettingOutlined, SunOutlined, ThunderboltOutlined, ToolOutlined } from '@ant-design/icons'
+import { ApartmentOutlined, ClearOutlined, CloudUploadOutlined, DownloadOutlined, EditOutlined, InfoCircleOutlined, LineChartOutlined, MoonOutlined, PlayCircleOutlined, SettingOutlined, SunOutlined, ThunderboltOutlined, ToolOutlined, WarningOutlined } from '@ant-design/icons'
 import client from './api/client'
 
 // Module-level promise — created once regardless of StrictMode double-mount.
@@ -25,6 +25,7 @@ import About from './pages/About'
 import Upload from './pages/Upload'
 import DynawoVersion from './pages/DynawoVersion'
 import EditCurves from './pages/EditCurves'
+import Events from './pages/Events'
 import EditParameters from './pages/EditParameters'
 import EditSolverParameters from './pages/EditSolverParameters'
 import LoadFlow from './pages/LoadFlow'
@@ -58,6 +59,7 @@ const NAV_ITEMS = [
   { key: '/edit-parameters',        label: 'Edit Parameters',       icon: <EditOutlined /> },
   { key: '/edit-solver-parameters', label: 'Edit Solver Params',    icon: <ToolOutlined /> },
   { key: '/edit-curves',            label: 'Edit Curves',           icon: <LineChartOutlined /> },
+  { key: '/events',                 label: 'Events',                icon: <WarningOutlined /> },
   { key: '/run-simulation',         label: 'Run Simulation',        icon: <PlayCircleOutlined /> },
   { key: '/about',                  label: 'About',                 icon: <InfoCircleOutlined /> },
 ]
@@ -155,6 +157,7 @@ function AppLayout({ isDark, toggleTheme }: { isDark: boolean; toggleTheme: () =
             <Route path="/edit-parameters" element={<EditParameters />} />
             <Route path="/edit-solver-parameters" element={<EditSolverParameters />} />
             <Route path="/edit-curves" element={<EditCurves />} />
+            <Route path="/events" element={<Events />} />
             <Route path="/run-simulation" element={<RunSimulation />} />
             <Route path="/about" element={<About />} />
           </Routes>
