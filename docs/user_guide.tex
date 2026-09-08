@@ -111,6 +111,7 @@ pages in workflow order:
   \item \textbf{Edit Solver Parameters} --- modify solver parameters
   \item \textbf{Edit Curves} --- define which model variables Dynawo will export
     to \code{curves.csv}
+  \item \textbf{Events} --- apply events to the case during the simulation
   \item \textbf{Run Simulation} --- configure, launch, and compare simulations
   \item \textbf{About} --- workflow overview
 \end{enumerate}
@@ -906,7 +907,167 @@ Clicking it overwrites the file with the originally uploaded bytes and clears
 the change log.
 
 % ═════════════════════════════════════════════════════════════════════════════
-\section{Page 8 --- Run Simulation}
+\section{Page 8 --- Events}
+\label{sec:events}
+
+This page builds the events of a study as a \ftype{dyd} file with its
+\ftype{par} file, and declares them in a job. Which events are on offer comes
+from a catalogue (Section~\ref{sec:eventscatalogue}) --- today disconnections
+and connections; anything else Dynawo can do, such as changing a setpoint, is
+added by declaring it there.
+
+Requires an \ftype{iidm} file (to act on network objects), a \ftype{dyd} file
+(to act on dynamic models), and a configured Dynawo executable
+(Section~\ref{sec:dynawoversion}): the parameters and the ports of every event
+are read from the descriptor files of the installed version.
+
+\subsection{Choosing the events file}
+
+The bar at the top of the page selects the \textbf{job} and the \textbf{events
+file}. Everything below acts on that file: the list at the bottom of the page
+is its content, not a draft.
+
+\begin{itemize}[leftmargin=2em]
+  \item Pick an existing events file to open it. Files are recognised by what
+    they contain, so a file written in an earlier session is offered here.
+  \item Pick \textbf{New events file\ldots} to start one. A name is suggested
+    from the job; the file itself is written on the first save.
+\end{itemize}
+
+Two buttons act on the open file: \textbf{Take out of the job} removes its
+\code{<dynModels>} line while keeping the file (saving again puts it back), and
+the trash icon deletes the \ftype{dyd} and its \ftype{par} altogether.
+
+\subsection{Building an event}
+
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{Object} --- search it by its IIDM id, or by the id of a dynamic
+    model of the \ftype{dyd}. The two lists never overlap: an object a dynamic
+    model represents is not simulated by the network model, so it appears only
+    under its model. A grey line under the search says how many objects are not
+    listed and why (for instance \emph{no ``switchOffSignal2'' port}).
+  \item \textbf{Event} --- only events that can actually be wired to that
+    object are offered.
+  \item \textbf{Parameters} --- read from the descriptor of the event library,
+    so they always match the installed Dynawo. The event time is set here.
+    Values the event imposes itself --- what makes it that event and not
+    another built on the same library --- are shown below the table and cannot
+    be edited.
+  \item \textbf{Connection} --- proposed automatically. Untick \textbf{Connect
+    automatically} to choose the two variables yourself; each side then only
+    offers variables of the same type as the one picked on the other side.
+\end{enumerate}
+
+Click \textbf{Add to \emph{<file>}} to put the event in the list.
+
+\subsection{Saving}
+
+\textbf{Save} writes the \ftype{dyd} and the \ftype{par} from the list, and
+adds \code{<dynModels dydFile="..."/>} to the selected job if it is not already
+there. A tag next to the file name shows \emph{not written yet} for a new file
+and \emph{unsaved changes} once the list differs from the file.
+
+\begin{notebox}
+Nothing is written before \textbf{Save} --- adding, editing or removing events
+changes the list only. This is deliberate: a study usually applies several
+events at once, and they all go into the same pair of files.
+\end{notebox}
+
+If the chosen file also declares models of the network, only the events in it
+are rewritten; everything else it contains is left untouched.
+
+\subsection{Changing and removing events}
+
+The edit icon on a row opens it in place: parameter values, the wiring, and the
+id the model will take in the \ftype{dyd}. \textbf{Apply changes} updates the
+list. The trash icon removes an event from the list.
+
+Removing every event and saving does one of two things: if the file held events
+only, the button becomes \textbf{Delete the file} and the file is removed from
+the session and from its jobs; if the file also declares models, saving simply
+takes the events out and keeps the rest.
+
+\subsection{The event catalogue --- \code{resources/events.xml}}
+\label{sec:eventscatalogue}
+
+Every event the page offers is declared in \code{resources/events.xml}. Adding
+one there is enough for it to appear in the application; no code changes. An
+event is described by the library it instantiates, the object kinds it applies
+to, the ports it wires and the values it imposes --- which covers any event
+Dynawo provides, not only connections and disconnections.
+
+The file holds two families --- \code{scope="network"} for objects simulated by
+Dynawo's internal network model, \code{scope="dynamic"} for those backed by a
+\ftype{dyd} model --- each holding \code{<event>} entries:
+
+\begin{lstlisting}
+<event id="network_load_disconnection" appliesTo="LOAD"
+       label="Load disconnection" lib="EventConnectedStatus">
+  <automatic>true</automatic>
+  <connectPattern valueVar1="state" valueVar2="state"/>
+  <destination to="NETWORK"/>
+  <fixedParameter pattern="open" value="true"/>
+</event>
+\end{lstlisting}
+
+\begin{description}[leftmargin=2em]
+  \item[\code{id}] Unique name of the event. It also appears in the id of the
+    model written in the \ftype{dyd}.
+  \item[\code{label}] What the user sees in the event list.
+  \item[\code{lib}] Dynawo event library to instantiate. Its
+    \code{ddb/<lib>.desc.xml} supplies the parameters of the form and the
+    variables its side of a connection may use.
+  \item[\code{appliesTo}] Kind of equipment the event is for: \code{LINE},
+    \code{TRANSFORMER}, \code{LOAD}, \code{GENERATOR}, \code{SHUNT},
+    \code{SVC}, \code{DANGLING\_LINE}, \code{HVDC}. Omit it to offer the event
+    for any object whose descriptor fits.
+  \item[\code{forLib}] Restricts the event to models of the named libraries
+    (several separated by \code{|}). Use it for a model that names its ports
+    its own way, instead of loosening the fragments every other model relies on.
+  \item[\code{<automatic>}] \code{true} lets the page propose the wiring, with
+    a checkbox to switch it off. Absent or \code{false}, the user always picks
+    the two variables.
+  \item[\code{<connectPattern>}] One connection to build, given as a fragment
+    of the variable name to look for on each side: \code{valueVar1} on the
+    event library, \code{valueVar2} on the object. Repeat the element for an
+    event wiring several ports.
+  \item[\code{<destination>}] \code{NETWORK} for a network object,
+    \code{MODEL} for a dynamic model.
+  \item[\code{<fixedParameter>}] A parameter value that belongs to the event
+    itself, given as a fragment (\code{pattern}) or an exact name
+    (\code{name}). It is imposed when the event is written and hidden from the
+    form --- it is what distinguishes two events built on the same library,
+    such as a disconnection from a connection.
+\end{description}
+
+\subsubsection*{How fragments are matched}
+
+\begin{itemize}[leftmargin=2em]
+  \item A fragment matches any variable \emph{containing} it, ignoring case, so
+    \code{switchOffSignal2} matches both \code{load\_switchOffSignal2} and
+    \code{load\_switchOffSignal2\_value} --- the same entry works across Dynawo
+    versions that spell the port differently.
+  \item Several alternatives may be given, separated by \code{|}, and are tried
+    in order.
+  \item When several variables match, the closest one wins: a whole word of the
+    name first, then the shortest. Both sides of a connection must have the
+    \emph{same type}; a pair of different types is never proposed.
+  \item If nothing matches, the event is simply not offered for that object,
+    and the line under the object search says why.
+  \item For \code{<fixedParameter>}, exactly one parameter must match. If none
+    or several do, the value is not imposed and the parameter appears in the
+    form for the user to set.
+\end{itemize}
+
+\begin{warnbox}
+Keep fragments specific. On a model declaring both \code{switchOff1\_value} and
+\code{switchOff2\_value}, the fragment \code{switchOff} matches both and the
+closest-match rule picks \code{switchOff1\_value} --- the node signal instead of
+the event one. Write \code{switchOff2}.
+\end{warnbox}
+
+% ═════════════════════════════════════════════════════════════════════════════
+\section{Page 9 --- Run Simulation}
 \label{sec:runsim}
 
 Requires a \ftype{jobs} file and a configured Dynawo executable.
@@ -1011,6 +1172,9 @@ The chart grows taller as plots are added.
     Otherwise click \textbf{Create}, then select the desired variables using
     the catalogue picker or the \textbf{Select all variables} button, and
     click \textbf{Apply changes} (Section~\ref{sec:editcurves}).
+  \item \textbf{Events} (\emph{optional}) --- add the events of the study and
+    save them into their own \ftype{dyd} file, declared in the job
+    (Section~\ref{sec:events}).
   \item \textbf{Run Simulation} --- run a first simulation (\emph{Run~1}).
     The network is loaded automatically when you first visit \textbf{Network
     View}.
