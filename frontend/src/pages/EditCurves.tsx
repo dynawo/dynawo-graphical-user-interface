@@ -15,6 +15,7 @@ import {
 import { CaretRightOutlined, CheckSquareOutlined, CopyOutlined, DeleteOutlined, PlusOutlined, RedoOutlined, RollbackOutlined, SaveOutlined } from '@ant-design/icons'
 import { List, type RowComponentProps } from 'react-window'
 import client from '../api/client'
+import { errorDetail, errorStatus } from '../api/errors'
 
 const { Title, Text } = Typography
 
@@ -375,8 +376,8 @@ export default function EditCurves() {
           init[selKey(g.model, c.variable)] = c.active
       setServerSel(init)
       setSelection(init)
-    } catch (e: any) {
-      if (e.response?.status === 404) setNoCrv(true)
+    } catch (e) {
+      if (errorStatus(e) === 404) setNoCrv(true)
     }
   }
 
@@ -384,7 +385,7 @@ export default function EditCurves() {
     try {
       const res = await client.get<LogEntry[]>('/curves/changelog', scoped(jobsFile))
       setChangelog(res.data)
-    } catch {}
+    } catch { /* a job with no curves file has no log — the page shows none */ }
   }
 
   const fetchCatalogue = async (jobsFile: string | null) => {
@@ -395,18 +396,7 @@ export default function EditCurves() {
         setCatalogueAvailable(true)
         setCatalogue(res.data.catalogue)
       }
-    } catch {}
-  }
-
-  const fetchInitInfo = async (jobsFile: string | null) => {
-    try {
-      const res = await client.get<InitInfo>('/curves/init-info', scoped(jobsFile))
-      setInitInfo(res.data)
-      setNewCrvName(res.data.suggested_filename)
-    } catch {
-      setInitInfo({ suggested_filename: 'curves.crv', has_jobs: false })
-      setNewCrvName('curves.crv')
-    }
+    } catch { /* no catalogue without a Dynawo executable — the page works without it */ }
   }
 
   // Keep the module-level cache in sync so a remount (page switch) can hydrate from it.
@@ -426,9 +416,16 @@ export default function EditCurves() {
   // re-read on every visit — a job may have gained or lost its <curves> element
   // (Upload, autoload, or a create from this very page) since the last one.
   useEffect(() => {
-    fetchTargets()
-      .then(list => setScope(prev =>
-        prev && list.some(t => t.jobs_file === prev) ? prev : (list[0]?.jobs_file ?? null)))
+    client.get<TargetsResp>('/curves/targets')
+      .then(res => {
+        const list = res.data.targets
+        setTargets(list)
+        // Keep the job being edited when it is still there, so a revisit does
+        // not silently move the editor to another job's curves.
+        setScope(prev =>
+          prev && list.some(t => t.jobs_file === prev) ? prev : (list[0]?.jobs_file ?? null))
+      })
+      .catch(() => { /* a session with no jobs file simply has no target */ })
       .finally(() => setTargetsLoaded(true))
   }, [])
 
@@ -472,7 +469,17 @@ export default function EditCurves() {
     if (prev === true && !noCrv) fetchCatalogue(scope)
   }, [noCrv, scope])
 
-  useEffect(() => { if (noCrv) fetchInitInfo(scope) }, [noCrv, scope])
+  useEffect(() => {
+    if (!noCrv) return
+    client.get<InitInfo>('/curves/init-info', scoped(scope))
+      .then(res => { setInitInfo(res.data); setNewCrvName(res.data.suggested_filename) })
+      .catch(() => {
+        // No suggestion from the server is not a reason to block the creation:
+        // a default name lets the user create the file anyway.
+        setInitInfo({ suggested_filename: 'curves.crv', has_jobs: false })
+        setNewCrvName('curves.crv')
+      })
+  }, [noCrv, scope])
 
   // Augment server groups with every other DYD model that has no curves yet, so the user can
   // browse and add curves (or propagate one to sibling-lib models) across the whole network, not
@@ -572,8 +579,8 @@ export default function EditCurves() {
       await fetchChangelog(scope)
       await fetchTargets()
       setSuccess(describeApply(res.data))
-    } catch (e: any) {
-      setError(e.response?.data?.detail ?? 'Apply failed')
+    } catch (e) {
+      setError(errorDetail(e, 'Apply failed'))
     } finally {
       setSaving(false)
     }
@@ -586,8 +593,8 @@ export default function EditCurves() {
       await fetchChangelog(scope)
       await fetchTargets()
       setSuccess(`${crvFile ?? 'Curves file'} restored to original.`)
-    } catch (e: any) {
-      setError(e.response?.data?.detail ?? 'Restore failed')
+    } catch (e) {
+      setError(errorDetail(e, 'Restore failed'))
     }
   }
 
@@ -631,8 +638,8 @@ export default function EditCurves() {
       // ────────────────────────────────────────────────────────────────────────
 
       await fetchChangelog(scope)
-    } catch (e: any) {
-      setError(e.response?.data?.detail ?? 'Failed to create curves file')
+    } catch (e) {
+      setError(errorDetail(e, 'Failed to create curves file'))
     } finally {
       setCreating(false)
     }
@@ -774,8 +781,8 @@ export default function EditCurves() {
         setSuccess('Reverted — note: later entries modified the same curves; the log may be inconsistent.')
       else
         setSuccess(`Reverted changes from ${entry.timestamp}.`)
-    } catch (e: any) {
-      setError(e.response?.data?.detail ?? 'Revert failed')
+    } catch (e) {
+      setError(errorDetail(e, 'Revert failed'))
     }
   }
 

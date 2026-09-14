@@ -14,6 +14,7 @@ import {
 } from 'antd'
 import { DeleteOutlined, EditOutlined, PlusOutlined, SaveOutlined } from '@ant-design/icons'
 import client from '../api/client'
+import { errorDetail } from '../api/errors'
 
 const { Title, Text } = Typography
 
@@ -92,12 +93,6 @@ function variableOptions(matches: string[], all: string[]) {
 
 // The .par is never named separately: it is written with the .dyd and only the
 // two of them reference each other.
-// axios rejects with an unknown; the useful part is FastAPI's `detail`.
-function errorDetail(err: unknown, fallback: string): string {
-  const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-  return typeof detail === 'string' ? detail : fallback
-}
-
 function parFileFor(dydName: string): string {
   const trimmed = dydName.trim() || 'events.dyd'
   return trimmed.replace(/\.dyd$/, '') + '.par'
