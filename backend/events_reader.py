@@ -8,7 +8,7 @@
 # SPDX-License-Identifier: MPL-2.0
 #
 
-from backend.dyd_parser import parse_dyd, parse_dyd_connections
+from backend.dyd_parser import connections_from_root, models_from_root, parse_dyd_root
 
 NETWORK_MODEL_ID = "NETWORK"
 
@@ -18,7 +18,7 @@ def read_events(
     par_sets: dict[str, list[dict]],
     catalogue: list[dict],
     static_ids: set[str],
-) -> tuple[list[dict], list[dict]]:
+) -> tuple[list[dict], list[dict], int]:
     """Recover the events an already written .dyd holds, as the page staged them.
 
     Written events are ordinary blackBoxModels, so what makes one an event here
@@ -26,17 +26,27 @@ def read_events(
     read back from the pair of files: the connections say which object the event
     acts on, `par_sets` (the .dyd's .par, parsed) carries the values.
 
-    Returns (events, skipped) — skipped naming each model left out and why, so a
-    file that is only partly recognised is reported rather than silently halved.
+    Returns (events, skipped, other_models) — skipped naming each model left out
+    and why, so a file only partly recognised is reported rather than silently
+    halved, and other_models counting the models that are not events at all,
+    which is what tells a file of events from a .dyd describing the network that
+    happens to declare a few.
+
+    `par_sets` may be empty when only the count of events matters: a .par of a
+    real case is large, and reading it to answer "how many events does this file
+    hold" would cost more than the answer is worth.
     """
-    models = parse_dyd(dyd_content)
-    connections = parse_dyd_connections(dyd_content)
+    root = parse_dyd_root(dyd_content)
+    models = models_from_root(root)
+    connections = connections_from_root(root)
     event_libs = {e["lib"] for e in catalogue}
 
     events: list[dict] = []
     skipped: list[dict] = []
+    other_models = 0
     for model_id, info in models.items():
         if info["lib"] not in event_libs:
+            other_models += 1
             skipped.append({"model_id": model_id, "reason": f"{info['lib']} is not an event library of the catalogue"})
             continue
         wires = [c for c in connections if c["id1"] == model_id]
@@ -68,7 +78,7 @@ def read_events(
             "parameters":  par_sets.get(info["parId"], []),
             "connections": [{"var1": w["var1"], "id2": w["id2"], "var2": w["var2"]} for w in wires],
         })
-    return events, skipped
+    return events, skipped, other_models
 
 
 def _network_target(wires: list[dict], static_ids: set[str]) -> str:

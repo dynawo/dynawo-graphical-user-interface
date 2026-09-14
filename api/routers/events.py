@@ -9,6 +9,7 @@
 #
 
 import os
+import threading
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -19,6 +20,7 @@ from api.session_store import UserSession
 from backend.desc_parser import get_lib_parameter_details, get_lib_symbols
 from backend.dyd_parser import parse_dyd
 from backend.events_catalogue import (
+    CATALOGUE_PATH,
     load_events_catalogue,
     match_connection,
     patterns_resolve,
@@ -84,6 +86,15 @@ def _current_bytes(session: UserSession, name: str | None) -> bytes | None:
         return fh.read()
 
 
+def _file_signature(session: UserSession, name: str) -> tuple:
+    """What identifies a file's content cheaply: its size and modification time."""
+    try:
+        stat = os.stat(session.session_manager.get_path(name))
+        return (stat.st_size, stat.st_mtime_ns)
+    except OSError:
+        return (0, 0)
+
+
 def _files_of_type(session: UserSession, ftype: str) -> list[str]:
     return [n for n, m in session.uploaded_files_info.items() if m.get("ftype") == ftype]
 
@@ -102,11 +113,27 @@ def _job_dyd_names(session: UserSession, jobs_file: str) -> list[str] | None:
 
 def _dyd_models(session: UserSession, jobs_file: str | None) -> dict[str, dict]:
     """The .dyd models an event of this job may target, scoped to that job's
-    own .dyd files so two jobs sharing a session don't show each other's."""
+    own .dyd files so two jobs sharing a session don't show each other's.
+
+    Cached on the .dyd files themselves: the object search asks for this on
+    every keystroke, and parsing a case's .dyd again each time is what made the
+    search lag behind the typing."""
     if jobs_file and not session.session_manager.has_file(jobs_file):
         raise HTTPException(status_code=404, detail=f"{jobs_file} not found in session")
     dyd_names = _job_dyd_names(session, jobs_file) if jobs_file else None
-    return get_dyd_models(session, dyd_names)
+    names = sorted(dyd_names if dyd_names is not None else _files_of_type(session, "dyd"))
+    key = tuple((n, _file_signature(session, n)) for n in names)
+
+    cache = session.events_cache.setdefault("dyd_models", {})
+    hit = cache.get(jobs_file or "")
+    if hit and hit[0] == key:
+        return hit[1]
+    models = get_dyd_models(session, dyd_names)
+    cache[jobs_file or ""] = (key, models)
+    return models
+
+
+_network_load_lock = threading.Lock()
 
 
 def _ensure_network(session: UserSession):
@@ -115,35 +142,77 @@ def _ensure_network(session: UserSession):
     The Events page needs the static ids without the user having visited the
     Network View first, so it loads the session's IIDM itself when nothing has
     yet. Returns None when the session has no IIDM, or it fails to load — the
-    page then offers dynamic-model targets only."""
+    page then offers dynamic-model targets only.
+
+    Serialized: the page's first render asks for the objects and for the event
+    files at once, and both land here. Without the lock they would both load the
+    same network — twice the work, on the one request where the user is already
+    waiting, and two threads driving pypowsybl over the same file.
+    """
     if session.network is not None:
         return session.network
     iidm_files = _files_of_type(session, "iidm")
     if not iidm_files:
         return None
-    try:
-        session.network = load_network_from_path(session.session_manager.get_path(iidm_files[0]))
-        session.network_name = iidm_files[0]
-    except Exception:
-        return None
+    with _network_load_lock:
+        # Another request may have loaded it while this one waited.
+        if session.network is not None:
+            return session.network
+        try:
+            session.network = load_network_from_path(session.session_manager.get_path(iidm_files[0]))
+            session.network_name = iidm_files[0]
+        except Exception:
+            return None
     return session.network
 
 
 def _iidm_types(session: UserSession) -> dict[str, str]:
-    """{static id: IIDM element type} for the loaded network, or {}."""
+    """{static id: IIDM element type} for the loaded network, or {}.
+
+    Walking every element of a real network takes long enough that doing it per
+    request — let alone per file of a request — is what makes the page feel
+    stuck, so the answer is kept until another network is loaded."""
     network = _ensure_network(session)
     if network is None:
         return {}
-    return {e["id"]: e["type"] for e in get_searchable_elements(network)}
+    # Key and value are published together, in one assignment. Split over two —
+    # key first, value after the scan — a second request arriving in between
+    # would see the key it expects and read a value that is not there yet.
+    key = (session.network_name, id(network))
+    cache = session.events_cache
+    hit = cache.get("iidm_types")
+    if hit is not None and hit[0] == key:
+        return hit[1]
+    types = {e["id"]: e["type"] for e in get_searchable_elements(network)}
+    cache["iidm_types"] = (key, types)
+    return types
 
 
 # ── Catalogue helpers ─────────────────────────────────────────────────────────
 
+_catalogue_cache: tuple[float, list[dict]] | None = None
+
+
+def _catalogue_mtime() -> float:
+    try:
+        return os.stat(CATALOGUE_PATH).st_mtime
+    except OSError:
+        return 0.0
+
+
 def _catalogue() -> list[dict]:
-    events = load_events_catalogue()
-    if not events:
-        raise HTTPException(status_code=500, detail="Event catalogue resources/events.xml is missing or invalid")
-    return events
+    """The parsed catalogue, re-read only when resources/events.xml changes.
+
+    Every endpoint needs it, and editing the file during a session must still
+    take effect — hence the mtime rather than a read-once."""
+    global _catalogue_cache
+    mtime = _catalogue_mtime()
+    if _catalogue_cache is None or _catalogue_cache[0] != mtime:
+        events = load_events_catalogue()
+        if not events:
+            raise HTTPException(status_code=500, detail="Event catalogue resources/events.xml is missing or invalid")
+        _catalogue_cache = (mtime, events)
+    return _catalogue_cache[1]
 
 
 def _event_by_id(event_id: str) -> dict:
@@ -482,7 +551,7 @@ def _unique_model_id(session: UserSession, base: str, exclude_entry_id: str | No
     written: a duplicate would make Dynawo reject the .dyd. `exclude_entry_id`
     leaves out the event being edited, so re-applying its own id is not treated
     as a clash with itself."""
-    taken = set(get_dyd_models(session)) | {
+    taken = set(_dyd_models(session, None)) | {
         e.model_id for e in session.staged_events if e.entry_id != exclude_entry_id
     }
     if base not in taken:
@@ -793,14 +862,17 @@ class LoadRequest(BaseModel):
     dyd_file: str
 
 
-def _par_sets_of(session: UserSession, dyd_name: str, models: dict[str, dict]) -> dict[str, list[dict]]:
+def _par_sets_of(session: UserSession, models: dict[str, dict]) -> dict[str, list[dict]]:
     """The parameter sets the models of a .dyd point at, by set id.
 
     Every event of a file written here shares one .par, but a hand-written file
-    may spread them over several — so each distinct parFile is read."""
+    may spread them over several — so each distinct parFile is read, and each
+    only once: a .dyd of a real case names the same .par in thousands of models,
+    and parsing it per model instead of per file is minutes against seconds."""
     sets: dict[str, list[dict]] = {}
-    for info in models.values():
-        raw = _current_bytes(session, _session_name(session, info.get("parFile")))
+    par_names = {info.get("parFile") for info in models.values() if info.get("parFile")}
+    for par_ref in par_names:
+        raw = _current_bytes(session, _session_name(session, par_ref))
         if not raw:
             continue
         try:
@@ -811,33 +883,43 @@ def _par_sets_of(session: UserSession, dyd_name: str, models: dict[str, dict]) -
     return sets
 
 
-def _other_model_count(session: UserSession, dyd_name: str) -> int:
-    """How many models of a .dyd are not events.
+def _scan_dyd(session: UserSession, dyd_name: str, with_parameters: bool) -> tuple[list[dict], list[dict], int]:
+    """What a .dyd of the session holds: its events, what was left out, and how
+    many models are not events.
 
-    Tells a file of events only — which can be deleted outright when its last
-    event goes — from a .dyd describing the network that happens to declare a
-    few, where removing the events must leave the file in place."""
-    raw = _current_bytes(session, dyd_name)
-    if not raw:
-        return 0
-    try:
-        models = parse_dyd(raw)
-    except Exception:
-        return 0
-    event_libs = {e["lib"] for e in _catalogue()}
-    return sum(1 for info in models.values() if info["lib"] not in event_libs)
+    Cached per file: the listing runs on every change of the event list, and a
+    file that has not moved cannot have started holding different events. The
+    signature covers everything the answer depends on — the file itself, the
+    catalogue that says what an event is, and the network the static ids are
+    matched against.
 
-
-def _events_in_dyd(session: UserSession, dyd_name: str) -> tuple[list[dict], list[dict]]:
-    raw = _current_bytes(session, dyd_name)
-    if not raw:
-        return [], []
-    try:
-        models = parse_dyd(raw)
-    except Exception:
-        return [], []
+    `with_parameters` decides whether the .par is read at all. Listing the files
+    only needs counts; the values are read when a file is actually opened.
+    """
+    # Resolved before the key is built, not inside the scan: the first scan of a
+    # session is what loads the network, and a key naming the network from
+    # before that load could never match the one after it — every call would
+    # miss its own entry.
     static_ids = set(_iidm_types(session))
-    return read_events(raw, _par_sets_of(session, dyd_name, models), _catalogue(), static_ids)
+
+    key = (_file_signature(session, dyd_name), _catalogue_mtime(),
+           session.network_name, with_parameters)
+    cache = session.events_cache.setdefault("scans", {})
+    hit = cache.get(dyd_name)
+    if hit and hit[0] == key:
+        return hit[1]
+
+    raw = _current_bytes(session, dyd_name)
+    if not raw:
+        return [], [], 0
+    try:
+        models = parse_dyd(raw)
+    except Exception:
+        return [], [], 0
+    par_sets = _par_sets_of(session, models) if with_parameters else {}
+    result = read_events(raw, par_sets, _catalogue(), static_ids)
+    cache[dyd_name] = (key, result)
+    return result
 
 
 @router.get("/files")
@@ -862,7 +944,7 @@ def list_event_files(jobs_file: str | None = None, session: UserSession = Depend
     for dyd_name in _files_of_type(session, "dyd"):
         if wanted is not None and dyd_name not in wanted:
             continue
-        events, skipped = _events_in_dyd(session, dyd_name)
+        events, skipped, other_models = _scan_dyd(session, dyd_name, with_parameters=False)
         if events:
             files.append({
                 "dyd_file":     dyd_name,
@@ -870,7 +952,7 @@ def list_event_files(jobs_file: str | None = None, session: UserSession = Depend
                 "skipped":      len(skipped),
                 # Non-zero means the file is not only events: saving it keeps
                 # those models, and emptying it must not delete the file.
-                "other_models": _other_model_count(session, dyd_name),
+                "other_models": other_models,
                 "jobs_files":   declared_by.get(dyd_name, []),
             })
     return {"files": files}
@@ -888,7 +970,7 @@ def load_events(req: LoadRequest, session: UserSession = Depends(get_session)):
     """
     if not session.session_manager.has_file(req.dyd_file):
         raise HTTPException(status_code=404, detail=f"{req.dyd_file} not found in session")
-    events, skipped = _events_in_dyd(session, req.dyd_file)
+    events, skipped, other_models = _scan_dyd(session, req.dyd_file, with_parameters=True)
     if not events:
         detail = "No event of the catalogue found in that file"
         if skipped:
@@ -911,7 +993,7 @@ def load_events(req: LoadRequest, session: UserSession = Depends(get_session)):
     return {
         "source":  req.dyd_file,
         "par_file": par_filename_for(req.dyd_file),
-        "other_models": _other_model_count(session, req.dyd_file),
+        "other_models": other_models,
         "loaded":  len(session.staged_events),
         "skipped": skipped,
         "events":  [_staged_view(e) for e in session.staged_events],

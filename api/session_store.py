@@ -77,6 +77,12 @@ class UserSession:
     # Events composed on the Events page but not written yet — see StagedEvent.
     staged_events: list[StagedEvent] = field(default_factory=list)
 
+    # Scratch cache of the Events page: what scanning the session's files for
+    # events found, keyed on what would make the answer change (a file's size
+    # and mtime, the loaded network). Scanning a real case's .dyd and .par is
+    # expensive enough to be worth not repeating on every click.
+    events_cache: dict = field(default_factory=dict)
+
     # Parameter change logs
     par_change_log: list[ChangeLogEntry] = field(default_factory=list)
     solver_change_log: list[ChangeLogEntry] = field(default_factory=list)

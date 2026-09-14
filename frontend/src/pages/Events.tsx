@@ -14,7 +14,7 @@ import {
 } from 'antd'
 import { DeleteOutlined, EditOutlined, PlusOutlined, SaveOutlined } from '@ant-design/icons'
 import client from '../api/client'
-import { errorDetail } from '../api/errors'
+import { errorDetail, isTransient, retryTransient } from '../api/errors'
 
 const { Title, Text } = Typography
 
@@ -315,7 +315,7 @@ export default function Events() {
   }, [])
 
   useEffect(() => {
-    client.get<FileEntry[]>('/files/')
+    retryTransient(() => client.get<FileEntry[]>('/files/'))
       .then(res => {
         const jobs = res.data.filter(f => f.ftype === 'jobs').map(f => f.name)
         setJobsFiles(jobs)
@@ -327,7 +327,7 @@ export default function Events() {
         setSessionFiles(res.data.map(f => f.name))
       })
       .catch(() => setJobsFiles([]))
-    client.get<CatalogueResp>('/events/catalogue')
+    retryTransient(() => client.get<CatalogueResp>('/events/catalogue'))
       .then(res => {
         setCatalogue(res.data.events)
         setFamilies(res.data.families)
@@ -336,7 +336,7 @@ export default function Events() {
         if (res.data.families.length && !res.data.families.some(f => f.scope === 'network'))
           setKind(res.data.families[0].scope)
       })
-      .catch(err => setError(err.response?.data?.detail ?? 'Could not read the event catalogue'))
+      .catch(err => setError(errorDetail(err, 'Could not read the event catalogue')))
     // Chained rather than called straight from the effect body: what it sets
     // belongs to the response, not to the render that scheduled it.
     Promise.resolve().then(() => refreshStaged())
@@ -348,9 +348,16 @@ export default function Events() {
   const debounce = useRef<number | undefined>(undefined)
   const fetchTargets = useCallback((q: string) => {
     setLoadingTargets(true)
-    client.get<TargetsResp>('/events/targets', { params: { kind, q, ...(jobsFile ? { jobs_file: jobsFile } : {}) } })
+    retryTransient(() => client.get<TargetsResp>('/events/targets', {
+      params: { kind, q, ...(jobsFile ? { jobs_file: jobsFile } : {}) },
+    }))
       .then(res => setTargets(res.data))
-      .catch(err => setError(err.response?.data?.detail ?? 'Could not list the objects'))
+      .catch(err => setError(errorDetail(
+        err,
+        isTransient(err)
+          ? 'The server did not answer — it may still be starting. Try again in a moment.'
+          : 'Could not list the objects',
+      )))
       .finally(() => setLoadingTargets(false))
   }, [kind, jobsFile])
 
