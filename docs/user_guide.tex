@@ -208,7 +208,7 @@ builds only when needed, waits until the application answers, and opens the
 browser on it. Set \code{GUI\_PORT} to serve on a port other than 8080.
 
 \begin{notebox}
-No Dynawo download is needed in this mode. Every Linux release listed in
+No Dynawo download is needed in this mode. Every release listed in
 \code{resources/dynawo\_versions.json} and
 \code{resources/dynaflow\_versions.json} is already inside the image, so the
 \textbf{Dynawo Version} and \textbf{DynaFlow Launcher} pages show them as
@@ -347,13 +347,16 @@ already been downloaded on the server:
 
 \subsection{Downloading a new version}
 
-Select the target OS (auto-detected) and version, then click \textbf{Download}.
+Select the version, then click \textbf{Download}. Only Linux builds are
+listed: the application locates Dynawo through \code{dynawo.sh}, which only the
+Linux archives contain. On Windows, use the Docker setup
+(Section~\ref{sec:dockerquickstart}).
 A live progress bar streams download progress via Server-Sent Events --- the
 rest of the interface remains usable. Once extraction is complete a
 \textbf{Use this version} button activates it immediately.
 
 \begin{notebox}
-Running under Docker (Section~\ref{sec:dockerquickstart}), every Linux version
+Running under Docker (Section~\ref{sec:dockerquickstart}), every version
 is already installed and listed as available, so no download is needed --- just
 click \textbf{Use}. Downloading remains available for a build that is not
 included. Versions that ship with the image cannot be removed:
