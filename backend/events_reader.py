@@ -17,12 +17,15 @@ def read_events(
     dyd_content: bytes,
     par_sets: dict[str, list[dict]],
     catalogue: list[dict],
-    static_ids: set[str],
+    object_types: dict[str, str],
 ) -> tuple[list[dict], list[dict], int]:
     """Recover the events an already written .dyd holds, as the page staged them.
 
     Written events are ordinary blackBoxModels, so what makes one an event here
-    is its library being one the catalogue offers. Everything the page needs is
+    is its library being one the catalogue offers. `object_types` maps each
+    static id of the network to its equipment kind (LINE, GENERATOR, …): it is
+    how the object a network event acts on is recognised, and how two events
+    written identically for different kinds of object are told apart. Everything the page needs is
     read back from the pair of files: the connections say which object the event
     acts on, `par_sets` (the .dyd's .par, parsed) carries the values.
 
@@ -55,7 +58,7 @@ def read_events(
             continue
 
         kind = "network" if all(w["id2"] == NETWORK_MODEL_ID for w in wires) else "dynamic"
-        target_id = _network_target(wires, static_ids) if kind == "network" else wires[0]["id2"]
+        target_id = _network_target(wires, set(object_types)) if kind == "network" else wires[0]["id2"]
         if not target_id:
             skipped.append({
                 "model_id": model_id,
@@ -63,7 +66,8 @@ def read_events(
             })
             continue
 
-        event = _match_event(catalogue, info["lib"], kind, wires)
+        parameters = par_sets.get(info["parId"], [])
+        event = _match_event(catalogue, info["lib"], kind, wires, parameters, object_types.get(target_id, ""))
         if event is None:
             skipped.append({"model_id": model_id, "reason": f"the catalogue has no {kind} event using {info['lib']}"})
             continue
@@ -75,7 +79,7 @@ def read_events(
             "model_id":    model_id,
             "kind":        kind,
             "target_id":   target_id,
-            "parameters":  par_sets.get(info["parId"], []),
+            "parameters":  parameters,
             "connections": [{"var1": w["var1"], "id2": w["id2"], "var2": w["var2"]} for w in wires],
         })
     return events, skipped, other_models
@@ -95,16 +99,39 @@ def _network_target(wires: list[dict], static_ids: set[str]) -> str:
     return ""
 
 
-def _match_event(catalogue: list[dict], lib: str, kind: str, wires: list[dict]) -> dict | None:
+def _match_event(catalogue: list[dict], lib: str, kind: str, wires: list[dict],
+                 parameters: list[dict] | None = None, equipment: str = "") -> dict | None:
     """The catalogue event a written model came from.
 
-    The library and the scope narrow it down, and two events sharing both (a
-    disconnection and a reconnection of the same library, say) are told apart by
-    their patterns: the one whose fragments are in the variables actually wired
-    is the one that produced this model."""
+    The library and the scope narrow it down. What is left is told apart by
+    what differs between the candidates, in turn: the kind of object acted on —
+    a generator and a load are disconnected through the very same library and
+    wiring — then the values the event imposes — a disconnection and a
+    connection through EventConnectedStatus differ only in event_open — and
+    last their patterns, the one whose fragments are in the variables actually
+    wired being the one that produced this model.
+
+    Without `parameters` (a listing that only counts events), the imposed values
+    cannot be checked and the first candidate stands for all of them."""
     candidates = [e for e in catalogue if e["lib"] == lib and e["scope"] == kind]
     if len(candidates) <= 1:
         return candidates[0] if candidates else None
+
+    if equipment:
+        same_kind = [e for e in candidates if e["equipment_type"] == equipment]
+        if same_kind:
+            candidates = same_kind
+        if len(candidates) == 1:
+            return candidates[0]
+
+    if parameters:
+        written = {p["name"]: str(p["value"]).strip().lower() for p in parameters}
+        agreeing = [e for e in candidates
+                    if all(written.get(n) == str(v).strip().lower() for n, v in e["fixed_parameters"].items())]
+        if agreeing:
+            candidates = agreeing
+        if len(candidates) == 1:
+            return candidates[0]
     for event in candidates:
         patterns = event["patterns"]
         if len(patterns) == len(wires) and all(

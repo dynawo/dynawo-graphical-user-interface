@@ -24,6 +24,7 @@ from backend.events_catalogue import (
     load_events_catalogue,
     match_connection,
     patterns_resolve,
+    resolve_fixed_parameter,
 )
 from backend.events_reader import read_events
 from backend.events_writer import build_events_dyd, build_events_par, par_filename_for
@@ -46,10 +47,16 @@ NETWORK_ID_PLACEHOLDER = "@ID@"
 # have no event offered for them yet; adding one is a matter of extending the
 # catalogue and this line.
 _IIDM_TO_EQUIPMENT = {
-    "line":                    "LINE",
-    "two_winding_transformer": "TRANSFORMER",
-    "load":                    "LOAD",
-    "generator":               "GENERATOR",
+    "line":                      "LINE",
+    "two_winding_transformer":   "TRANSFORMER",
+    "three_winding_transformer": "TRANSFORMER_3W",
+    "load":                      "LOAD",
+    "generator":                 "GENERATOR",
+    "battery":                   "BATTERY",
+    "shunt_compensator":         "SHUNT",
+    "static_var_compensator":    "SVC",
+    "dangling_line":             "DANGLING_LINE",
+    "hvdc_line":                 "HVDC",
 }
 
 # Descriptor-less fallback for a dynamic model: the library name usually says
@@ -184,6 +191,15 @@ def _iidm_types(session: UserSession) -> dict[str, str]:
     if hit is not None and hit[0] == key:
         return hit[1]
     types = {e["id"]: e["type"] for e in get_searchable_elements(network)}
+    # An HVDC link is an object of its own to the network model — events act on
+    # the link, through the state of each converter — but the diagram search
+    # get_searchable_elements serves has no use for it, so it is added here
+    # rather than there.
+    try:
+        for hvdc_id in network.get_hvdc_lines().index:
+            types[str(hvdc_id)] = "hvdc_line"
+    except Exception:
+        pass
     cache["iidm_types"] = (key, types)
     return types
 
@@ -237,6 +253,7 @@ class _LibSymbols:
     def __init__(self, exe: str | None):
         self.exe = exe if exe and os.path.isfile(exe) else None
         self._cache: dict[str, list[str]] = {}
+        self._params: dict[str, list[dict]] = {}
 
     @property
     def available(self) -> bool:
@@ -253,6 +270,32 @@ class _LibSymbols:
         """The network model's variables as they read for one object."""
         return [v.replace(NETWORK_ID_PLACEHOLDER, static_id)
                 for v in self.variables(NETWORK_MODEL_LIB)]
+
+    def parameters(self, lib: str) -> list[dict]:
+        if not self.available:
+            return []
+        key = f"params:{lib}"
+        if key not in self._params:
+            self._params[key] = get_lib_parameter_details(self.exe, lib)
+        return self._params[key]
+
+    def fixed_values(self, event: dict) -> tuple[dict[str, str], list[dict]]:
+        """What the event imposes, under the names this install gives them.
+
+        Returns (resolved, unresolved): {parameter name: value} for each
+        <fixedParameter> that designates exactly one parameter of the event
+        library's descriptor, and the ones that do not — kept so the page can
+        say why a parameter it would normally set is in the form instead."""
+        descriptor = self.parameters(event["lib"])
+        resolved: dict[str, str] = {}
+        unresolved: list[dict] = []
+        for spec in event["fixed_parameters"]:
+            name = resolve_fixed_parameter(spec, descriptor)
+            if name is None:
+                unresolved.append({"pattern": spec["pattern"] or spec["name"], "value": spec["value"]})
+            else:
+                resolved[name] = spec["value"]
+        return resolved, unresolved
 
 
 def _events_for_network_target(events: list[dict], static_id: str, equipment_type: str, symbols: _LibSymbols) -> list[str]:
@@ -335,11 +378,11 @@ def list_targets(
     """The objects an event can be applied to, matching the search `q`.
 
     Two kinds, which is exactly the choice the user makes on the page:
-      * kind="network" — an IIDM id, taken from the loaded network;
+      * kind="network" — an IIDM id the network model simulates itself;
       * kind="dynamic" — the id of a blackBoxModel of the job's .dyd files.
-    An object with a dynamic model appears under both kinds: the same line can
-    be tripped through the network model or through its own model, and which
-    one the user picks is what decides the family of events offered.
+    The two never overlap. An IIDM object a .dyd model is declared for is
+    simulated by that model, not by the network one, so an event wired to
+    NETWORK for it would act on nothing: it is offered under its model only.
 
     Filtered and capped server-side: a large network has tens of thousands of
     ids, and the page only ever shows a searchable list of them.
@@ -353,9 +396,16 @@ def list_targets(
 
     targets: list[dict] = []
 
+    excluded_modelled = 0
     if kind in (None, "network"):
         for static_id, iidm_type in iidm_types.items():
             equipment = _IIDM_TO_EQUIPMENT.get(iidm_type, "")
+            if static_id in modelled_static_ids:
+                # Counted rather than silently dropped, so the page can say why
+                # an object the user expects is not in the list.
+                if _events_for_network_target(events, static_id, equipment, symbols):
+                    excluded_modelled += 1
+                continue
             event_ids = _events_for_network_target(events, static_id, equipment, symbols)
             if event_ids:
                 targets.append({
@@ -365,9 +415,6 @@ def list_targets(
                     "iidm_type":      iidm_type,
                     "lib":            None,
                     "static_id":      static_id,
-                    # Says the object is also reachable as a dynamic model, so the
-                    # user can tell an event on the network model from one on it.
-                    "has_dynamic_model": static_id in modelled_static_ids,
                     "event_ids":      event_ids,
                 })
 
@@ -385,7 +432,6 @@ def list_targets(
                     "iidm_type":      iidm_type,
                     "lib":            lib,
                     "static_id":      info["static_id"],
-                    "has_dynamic_model": True,
                     "event_ids":      event_ids,
                 })
 
@@ -401,6 +447,9 @@ def list_targets(
         "network_loaded":    bool(iidm_types),
         "network_file":      session.network_name,
         "dyd_model_count":   len(models),
+        # IIDM objects with network events in the catalogue, left out because a
+        # dynamic model represents them.
+        "excluded_modelled": excluded_modelled,
         "dynawo_available":  symbols.available,
     }
 
@@ -451,10 +500,14 @@ def get_event_form(
     event_variables = symbols.variables(event["lib"])
     descriptor = get_lib_parameter_details(symbols.exe, event["lib"]) if symbols.available else []
 
+    # A fixed value that does not designate exactly one parameter of this
+    # install's descriptor is not imposed: the parameter stays in the form,
+    # with no default, for the user to set.
+    fixed, unresolved_fixed = symbols.fixed_values(event)
     fields = [
         {"name": p["name"], "value_type": p["value_type"], "default": p["default"]}
         for p in descriptor
-        if not p["read_only"] and p["name"] != "event_nbEventVariables"
+        if not p["read_only"] and p["name"] != "event_nbEventVariables" and p["name"] not in fixed
     ]
 
     connections = [
@@ -482,6 +535,10 @@ def get_event_form(
         "descriptor_found":     bool(descriptor),
         "network_model_found":  bool(target_variables) if kind == "network" else None,
         "fields":               fields,
+        # Values the event imposes — shown, never edited: they are what makes
+        # it this event rather than another using the same library.
+        "fixed":                [{"name": n, "value": v} for n, v in fixed.items()],
+        "unresolved_fixed":     unresolved_fixed,
         "connections":          connections,
         "variables":            {"event": event_variables, "target": target_variables},
     }
@@ -562,7 +619,8 @@ def _unique_model_id(session: UserSession, base: str, exclude_entry_id: str | No
     return f"{base}_{i}"
 
 
-def _typed_parameters(symbols: _LibSymbols, lib: str, values: dict[str, str]) -> list[EventParameter]:
+def _typed_parameters(symbols: _LibSymbols, lib: str, values: dict[str, str],
+                      fixed: dict[str, str] | None = None) -> list[EventParameter]:
     """Pair each submitted value with the type its descriptor declares.
 
     The descriptor is what types a .par entry, so a value for a parameter it does
@@ -578,6 +636,9 @@ def _typed_parameters(symbols: _LibSymbols, lib: str, values: dict[str, str]) ->
     descriptor = {p["name"]: p for p in get_lib_parameter_details(symbols.exe, lib)}
     if not descriptor:
         raise HTTPException(status_code=422, detail=f"The configured Dynawo install has no ddb/{lib}.desc.xml")
+    # What the event imposes wins over whatever was sent: a connection event
+    # posted with event_open=true would silently become a disconnection.
+    values = {**values, **(fixed or {})}
 
     parameters: list[EventParameter] = []
     for name, raw in values.items():
@@ -646,7 +707,7 @@ def stage_event(req: StageRequest, session: UserSession = Depends(get_session)):
         kind=req.kind,
         model_id=_unique_model_id(session, (req.model_id or "").strip() or _suggested_model_id(event, req.target_id)),
         lib=event["lib"],
-        parameters=_typed_parameters(symbols, event["lib"], req.parameters),
+        parameters=_typed_parameters(symbols, event["lib"], req.parameters, symbols.fixed_values(event)[0]),
         connections=_validated_connections(req.connections, event, req.kind, req.target_id,
                                            symbols.variables(event["lib"]), target_variables),
     )
@@ -684,7 +745,7 @@ def update_staged_event(entry_id: str, req: UpdateRequest, session: UserSession 
         model_id=(model_id if model_id == current.model_id
                   else _unique_model_id(session, model_id, exclude_entry_id=entry_id)),
         lib=current.lib,
-        parameters=(_typed_parameters(symbols, current.lib, req.parameters)
+        parameters=(_typed_parameters(symbols, current.lib, req.parameters, symbols.fixed_values(event)[0])
                     if req.parameters is not None else current.parameters),
         connections=(_validated_connections(req.connections, event, current.kind, current.target_id,
                                             symbols.variables(current.lib), target_variables)
@@ -707,8 +768,20 @@ def _validated_event(event_id: str, kind: str) -> dict:
 
 def _target_variables(session: UserSession, symbols: _LibSymbols, kind: str,
                       target_id: str, jobs_file: str | None) -> list[str]:
-    """The variables the object offers the second side of a connection."""
+    """The variables the object offers the second side of a connection.
+
+    A network event on an object a dynamic model represents is refused here: the
+    network model does not simulate that object, so the NETWORK variable the
+    event would be wired to exists in name only."""
     if kind == "network":
+        modelled = next((m for m in _dyd_models(session, jobs_file).values()
+                         if m["static_id"] == target_id), None)
+        if modelled is not None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{target_id} is represented by the dynamic model {modelled['dyn_id']} "
+                       f"({modelled['lib']}); a network event would not act on it",
+            )
         return symbols.network_variables(target_id)
     info = _dyd_models(session, jobs_file).get(target_id)
     if info is None:
@@ -900,7 +973,7 @@ def _scan_dyd(session: UserSession, dyd_name: str, with_parameters: bool) -> tup
     # session is what loads the network, and a key naming the network from
     # before that load could never match the one after it — every call would
     # miss its own entry.
-    static_ids = set(_iidm_types(session))
+    object_types = {sid: _IIDM_TO_EQUIPMENT.get(t, "") for sid, t in _iidm_types(session).items()}
 
     key = (_file_signature(session, dyd_name), _catalogue_mtime(),
            session.network_name, with_parameters)
@@ -917,7 +990,11 @@ def _scan_dyd(session: UserSession, dyd_name: str, with_parameters: bool) -> tup
     except Exception:
         return [], [], 0
     par_sets = _par_sets_of(session, models) if with_parameters else {}
-    result = read_events(raw, par_sets, _catalogue(), static_ids)
+    # The reader compares imposed values with what the .par holds, so it gets
+    # the catalogue with each <fixedParameter> resolved against this install.
+    symbols = _LibSymbols(session.dynawo_executable)
+    catalogue = [{**e, "fixed_parameters": symbols.fixed_values(e)[0]} for e in _catalogue()]
+    result = read_events(raw, par_sets, catalogue, object_types)
     cache[dyd_name] = (key, result)
     return result
 

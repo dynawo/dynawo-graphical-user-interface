@@ -21,6 +21,129 @@
       <destination to="NETWORK"/>
     </event>
 
+    <event id="network_transformer_disconnection" appliesTo="TRANSFORMER"
+           label="Transformer disconnection" lib="EventQuadripoleDisconnection">
+      <automatic>true</automatic>
+      <connectPattern valueVar1="state" valueVar2="state"/>
+      <destination to="NETWORK"/>
+    </event>
+
+    <event id="network_transformer_connection" appliesTo="TRANSFORMER"
+           label="Transformer reconnection" lib="EventQuadripoleConnection">
+      <automatic>true</automatic>
+      <connectPattern valueVar1="state" valueVar2="state"/>
+      <destination to="NETWORK"/>
+    </event>
+
+    <!--
+      Injections all use EventConnectedStatus: what makes an event a disconnection
+      or a connection is only the value of its "open" parameter, so it is fixed
+      here rather than left to the form — it is what the event is. Named by a
+      fragment: the descriptor of the installed Dynawo says which parameter it is,
+      and if none (or several) match, the form offers it like any other.
+    -->
+    <event id="network_load_disconnection" appliesTo="LOAD"
+           label="Load disconnection" lib="EventConnectedStatus">
+      <automatic>true</automatic>
+      <connectPattern valueVar1="state" valueVar2="state"/>
+      <destination to="NETWORK"/>
+      <fixedParameter pattern="open" value="true"/>
+    </event>
+
+    <event id="network_load_connection" appliesTo="LOAD"
+           label="Load connection" lib="EventConnectedStatus">
+      <automatic>true</automatic>
+      <connectPattern valueVar1="state" valueVar2="state"/>
+      <destination to="NETWORK"/>
+      <fixedParameter pattern="open" value="false"/>
+    </event>
+
+    <event id="network_generator_disconnection" appliesTo="GENERATOR"
+           label="Generator disconnection" lib="EventConnectedStatus">
+      <automatic>true</automatic>
+      <connectPattern valueVar1="state" valueVar2="state"/>
+      <destination to="NETWORK"/>
+      <fixedParameter pattern="open" value="true"/>
+    </event>
+
+    <event id="network_generator_connection" appliesTo="GENERATOR"
+           label="Generator connection" lib="EventConnectedStatus">
+      <automatic>true</automatic>
+      <connectPattern valueVar1="state" valueVar2="state"/>
+      <destination to="NETWORK"/>
+      <fixedParameter pattern="open" value="false"/>
+    </event>
+
+    <event id="network_shunt_disconnection" appliesTo="SHUNT"
+           label="Shunt disconnection" lib="EventConnectedStatus">
+      <automatic>true</automatic>
+      <connectPattern valueVar1="state" valueVar2="state"/>
+      <destination to="NETWORK"/>
+      <fixedParameter pattern="open" value="true"/>
+    </event>
+
+    <event id="network_shunt_connection" appliesTo="SHUNT"
+           label="Shunt connection" lib="EventConnectedStatus">
+      <automatic>true</automatic>
+      <connectPattern valueVar1="state" valueVar2="state"/>
+      <destination to="NETWORK"/>
+      <fixedParameter pattern="open" value="false"/>
+    </event>
+
+    <event id="network_svc_disconnection" appliesTo="SVC"
+           label="SVC disconnection" lib="EventConnectedStatus">
+      <automatic>true</automatic>
+      <connectPattern valueVar1="state" valueVar2="state"/>
+      <destination to="NETWORK"/>
+      <fixedParameter pattern="open" value="true"/>
+    </event>
+
+    <event id="network_svc_connection" appliesTo="SVC"
+           label="SVC connection" lib="EventConnectedStatus">
+      <automatic>true</automatic>
+      <connectPattern valueVar1="state" valueVar2="state"/>
+      <destination to="NETWORK"/>
+      <fixedParameter pattern="open" value="false"/>
+    </event>
+
+    <event id="network_dangling_line_disconnection" appliesTo="DANGLING_LINE"
+           label="Dangling line disconnection" lib="EventConnectedStatus">
+      <automatic>true</automatic>
+      <connectPattern valueVar1="state" valueVar2="state"/>
+      <destination to="NETWORK"/>
+      <fixedParameter pattern="open" value="true"/>
+    </event>
+
+    <event id="network_dangling_line_connection" appliesTo="DANGLING_LINE"
+           label="Dangling line connection" lib="EventConnectedStatus">
+      <automatic>true</automatic>
+      <connectPattern valueVar1="state" valueVar2="state"/>
+      <destination to="NETWORK"/>
+      <fixedParameter pattern="open" value="false"/>
+    </event>
+
+    <!--
+      An HVDC link has no single state: each converter has its own (state1 on
+      side 1, state2 on side 2). The one event output drives both.
+    -->
+    <event id="network_hvdc_disconnection" appliesTo="HVDC"
+           label="HVDC disconnection" lib="EventConnectedStatus">
+      <automatic>true</automatic>
+      <connectPattern valueVar1="state" valueVar2="state1"/>
+      <connectPattern valueVar1="state" valueVar2="state2"/>
+      <destination to="NETWORK"/>
+      <fixedParameter pattern="open" value="true"/>
+    </event>
+
+    <event id="network_hvdc_connection" appliesTo="HVDC"
+           label="HVDC connection" lib="EventConnectedStatus">
+      <automatic>true</automatic>
+      <connectPattern valueVar1="state" valueVar2="state1"/>
+      <connectPattern valueVar1="state" valueVar2="state2"/>
+      <destination to="NETWORK"/>
+      <fixedParameter pattern="open" value="false"/>
+    </event>
+
   </eventFamily>
 
   <!--
@@ -30,12 +153,6 @@
     load_switchOffSignal2_value becomes valueVar2="switchOffSignal2".
 
     <eventFamily scope="network" label="Network object" …>
-      <event id="network_load_disconnection" appliesTo="LOAD"
-             label="Load disconnection" lib="EventSetPointBoolean">
-        <parameter name="event_tEvent" label="Event time" unit="s" default="10"/>
-        <parameter name="event_stateEvent1" label="Open" default="true"/>
-        <connect var1="event_state1_value" to="NETWORK" var2="@STATIC_ID@_state_value"/>
-      </event>
       <event id="network_load_variation" appliesTo="LOAD"
              label="Load step (P/Q)" lib="EventSetPointDoubleReal">
         <parameter name="event_tEvent" label="Event time" unit="s" default="10"/>

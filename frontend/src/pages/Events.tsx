@@ -27,8 +27,8 @@ interface CatalogueResp  { dynawo_available: boolean; events: CatalogueEvent[]; 
 // One selectable object. `kind` is what the user picked it by — an IIDM id or a
 // .dyd model id — and it decides which family of events applies, so the same
 // line can appear twice, once per kind.
-interface Target      { kind: Kind; id: string; equipment_type: string; iidm_type: string; lib: string | null; static_id: string; has_dynamic_model: boolean; event_ids: string[] }
-interface TargetsResp { targets: Target[]; total: number; truncated: boolean; network_loaded: boolean; network_file: string | null; dyd_model_count: number; dynawo_available: boolean }
+interface Target      { kind: Kind; id: string; equipment_type: string; iidm_type: string; lib: string | null; static_id: string; event_ids: string[] }
+interface TargetsResp { targets: Target[]; total: number; truncated: boolean; network_loaded: boolean; network_file: string | null; dyd_model_count: number; excluded_modelled: number; dynawo_available: boolean }
 
 interface Field { name: string; value_type: string; default: string | null }
 
@@ -50,6 +50,12 @@ interface FormResp {
   descriptor_found: boolean
   network_model_found: boolean | null
   fields: Field[]
+  // Values the event imposes (a connection is EventConnectedStatus with
+  // event_open=false): shown so the user knows, never offered for editing.
+  fixed: { name: string; value: string }[]
+  // Values the catalogue would impose but that designate no single parameter of
+  // the installed Dynawo — those parameters are in `fields`, for the user to set.
+  unresolved_fixed: { pattern: string; value: string }[]
   connections: Connection[]
   variables: { event: string[]; target: string[] }
 }
@@ -79,6 +85,28 @@ const KIND_LABEL: Record<Kind, string> = { network: 'Network object', dynamic: '
 const PICK_LABEL: Record<Kind, string> = { network: 'Pick by IIDM id', dynamic: 'Pick by dynamic model id' }
 // Sentinel for the "new file" entry of the select, kept apart from real filenames.
 const NEW_FILE = '__new_events_file__'
+
+function FixedParameters({ form }: { form: FormResp }) {
+  const { fixed, unresolved_fixed: unresolved } = form
+  if (!fixed.length && !unresolved.length) return null
+  return (
+    <Space direction="vertical" size={2}>
+      {fixed.length > 0 && (
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          Set by this event: {fixed.map((f, i) => (
+            <span key={f.name}>{i > 0 && ', '}<Text code style={{ fontSize: 12 }}>{f.name} = {f.value}</Text></span>
+          ))}
+        </Text>
+      )}
+      {unresolved.map(u => (
+        <Text key={u.pattern} type="warning" style={{ fontSize: 12 }}>
+          This event normally sets the parameter matching “{u.pattern}” to {u.value}, but {form.event.lib} in the
+          installed Dynawo has no single parameter matching it — set it above yourself.
+        </Text>
+      ))}
+    </Space>
+  )
+}
 
 // Matching variables first — they are already ranked closest-first by the
 // backend — then the rest of the side's variables, so an override starts from
@@ -208,6 +236,8 @@ function StagedEditor({
           },
         ]}
       />
+
+      <FixedParameters form={form} />
 
       {form.connections.map((c, i) => {
         const wire = wires[i] ?? { var1: null, var2: null }
@@ -725,8 +755,6 @@ export default function Events() {
                   <Text>{t.id}</Text>
                   {t.equipment_type && <Tag>{t.equipment_type}</Tag>}
                   {t.lib && <Tag color="purple">{t.lib}</Tag>}
-                  {t.kind === 'network' && t.has_dynamic_model &&
-                    <Text type="secondary" style={{ fontSize: 12 }}>also has a dynamic model</Text>}
                   {t.kind === 'dynamic' && t.static_id &&
                     <Text type="secondary" style={{ fontSize: 12 }}>staticId {t.static_id}</Text>}
                 </Space>
@@ -737,6 +765,12 @@ export default function Events() {
           {targets?.truncated && (
             <Text type="secondary">
               {targets.total} objects match — refine the search to see the rest.
+            </Text>
+          )}
+          {kind === 'network' && (targets?.excluded_modelled ?? 0) > 0 && (
+            <Text type="secondary">
+              {targets?.excluded_modelled} object(s) represented by a dynamic model are not listed: the network
+              model does not simulate them, so a network event would not act on them.
             </Text>
           )}
           {noTargets && kind === 'network' && !targets?.network_loaded && (
@@ -831,6 +865,8 @@ export default function Events() {
                 },
               ]}
             />
+
+            <FixedParameters form={form} />
 
           </Space>
         )}

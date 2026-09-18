@@ -26,9 +26,10 @@ def parse_events_catalogue(content: bytes) -> list[dict]:
     entry carries its family's scope so nothing has to walk back up the tree.
 
     Each entry: {id, scope, family_label, family_description, equipment_type,
-                 label, lib, automatic, destination, patterns}
-    where `destination` is "NETWORK" or "MODEL" and `patterns` is one
-    {var1, var2} fragment pair per connection to build.
+                 label, lib, automatic, destination, patterns, fixed_parameters}
+    where `destination` is "NETWORK" or "MODEL", `patterns` is one {var1, var2}
+    fragment pair per connection to build, and `fixed_parameters` maps a
+    parameter name to the value the event imposes on it.
     """
     root = ET.fromstring(content)
     events: list[dict] = []
@@ -50,6 +51,7 @@ def parse_events_catalogue(content: bytes) -> list[dict]:
                 "automatic":          _parse_automatic(ev),
                 "destination":        (destination.get("to") or "" if destination is not None else "").upper(),
                 "patterns":           _parse_patterns(ev),
+                "fixed_parameters":   _parse_fixed(ev),
             })
     return events
 
@@ -71,6 +73,66 @@ def _parse_patterns(ev: ET.Element) -> list[dict]:
             "var2": (p.get("valueVar2") or "").strip(),
         })
     return patterns
+
+
+def _parse_fixed(ev: ET.Element) -> list[dict]:
+    """Parameters whose value is part of what the event is.
+
+    Two events can share a library and a wiring and differ only in one value —
+    EventConnectedStatus disconnects or connects depending on event_open. That
+    value is the event's identity, not a setting: it is imposed when the event
+    is written and it is what tells the two apart when a file is read back.
+
+    Named by a fragment (`pattern`) rather than outright, like connections, so a
+    parameter renamed between Dynawo versions is still found; `name` remains for
+    an exact name. Which parameter it designates is only known once the event
+    library's descriptor is read — see resolve_fixed_parameter.
+    """
+    return [
+        {"pattern": p.get("pattern", ""), "name": p.get("name", ""), "value": p.get("value", "")}
+        for p in ev.findall("fixedParameter")
+        if p.get("pattern") or p.get("name")
+    ]
+
+
+def _types_accepting(value: str) -> set[str]:
+    """The descriptor types a literal value can be written as."""
+    v = value.strip()
+    if v.lower() in ("true", "false"):
+        return {"BOOL"}
+    try:
+        int(v)
+        return {"INT", "DOUBLE"}
+    except ValueError:
+        pass
+    try:
+        float(v)
+        return {"DOUBLE"}
+    except ValueError:
+        return {"STRING"}
+
+
+def resolve_fixed_parameter(spec: dict, descriptor: list[dict]) -> str | None:
+    """The one descriptor parameter a <fixedParameter> designates, or None.
+
+    Only parameters the user could set are candidates — a read-only one is
+    computed by Dynawo — and only those whose type accepts the value: "true"
+    cannot designate a DOUBLE. What is left must be a single parameter. Several
+    is refused as firmly as none: a fixed value is imposed without the user
+    seeing it, so it must never land on a parameter picked by guesswork. The
+    caller then offers the parameter in the form like any other.
+    """
+    types = _types_accepting(spec["value"])
+    candidates = [
+        p["name"] for p in descriptor
+        if not p["read_only"] and p["name"] != "event_nbEventVariables" and p["value_type"] in types
+    ]
+    if spec.get("name"):
+        matches = [n for n in candidates if n == spec["name"]]
+    else:
+        fragment = spec["pattern"].lower()
+        matches = [n for n in candidates if fragment in n.lower()]
+    return matches[0] if len(matches) == 1 else None
 
 
 def load_events_catalogue(path: str = CATALOGUE_PATH) -> list[dict]:
