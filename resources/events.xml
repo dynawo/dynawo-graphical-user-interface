@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<events>
+
+  <!-- ================================================================== -->
+  <!-- Events on network objects: picked by IIDM id, wired to NETWORK     -->
+  <!-- ================================================================== -->
+  <eventFamily scope="network" label="Network object"
+               description="Object simulated by Dynawo's internal network model, picked by its IIDM id.">
+
+    <event id="network_line_disconnection" appliesTo="LINE"
+           label="Line disconnection" lib="EventQuadripoleDisconnection">
+      <automatic>true</automatic>
+      <connectPattern valueVar1="state" valueVar2="state"/>
+      <destination to="NETWORK"/>
+    </event>
+
+    <event id="network_line_connection" appliesTo="LINE"
+           label="Line reconnection" lib="EventQuadripoleConnection">
+      <automatic>true</automatic>
+      <connectPattern valueVar1="state" valueVar2="state"/>
+      <destination to="NETWORK"/>
+    </event>
+
+  </eventFamily>
+
+  <!--
+    Everything below is the earlier sketch, kept until it is converted to the
+    <connectPattern>/<destination> shape above. Its <connect var2="…"> named the
+    target port outright; the fragment to search for is what replaces it, e.g.
+    load_switchOffSignal2_value becomes valueVar2="switchOffSignal2".
+
+    <eventFamily scope="network" label="Network object" …>
+      <event id="network_load_disconnection" appliesTo="LOAD"
+             label="Load disconnection" lib="EventSetPointBoolean">
+        <parameter name="event_tEvent" label="Event time" unit="s" default="10"/>
+        <parameter name="event_stateEvent1" label="Open" default="true"/>
+        <connect var1="event_state1_value" to="NETWORK" var2="@STATIC_ID@_state_value"/>
+      </event>
+      <event id="network_load_variation" appliesTo="LOAD"
+             label="Load step (P/Q)" lib="EventSetPointDoubleReal">
+        <parameter name="event_tEvent" label="Event time" unit="s" default="10"/>
+        <parameter name="event_stateEvent1" label="Active power after the event" unit="pu" default="0"/>
+        <parameter name="event_stateEvent2" label="Reactive power after the event" unit="pu" default="0"/>
+        <connect var1="event_state1_value" to="NETWORK" var2="@STATIC_ID@_P0Pu_value"/>
+        <connect var1="event_state2_value" to="NETWORK" var2="@STATIC_ID@_Q0Pu_value"/>
+      </event>
+    </eventFamily>
+
+    <eventFamily scope="dynamic" label="Dynamic model"
+                 description="Object backed by a blackBoxModel of the .dyd, picked by its model id.">
+      <event id="dynamic_line_disconnection" appliesTo="LINE"
+             label="Line disconnection" lib="EventQuadripoleDisconnection">
+        <connect var1="event_state1_value" to="MODEL" var2="line_switchOffSignal2_value"/>
+      </event>
+      <event id="dynamic_load_disconnection" appliesTo="LOAD"
+             label="Load disconnection" lib="EventConnectedStatus">
+        <connect var1="event_state1_value" to="MODEL" var2="load_switchOffSignal2_value"/>
+      </event>
+      <event id="dynamic_load_variation" appliesTo="LOAD"
+             label="Load setpoint step (P/Q)" lib="EventSetPointDoubleReal">
+        <connect var1="event_state1_value" to="MODEL" var2="load_PRefPu|load_PRefPu_value"/>
+        <connect var1="event_state2_value" to="MODEL" var2="load_QRefPu|load_QRefPu_value"/>
+      </event>
+      <event id="dynamic_generator_disconnection" appliesTo="GENERATOR"
+             label="Generator disconnection" lib="EventConnectedStatus">
+        <connect var1="event_state1_value" to="MODEL" var2="generator_switchOffSignal2_value"/>
+      </event>
+      <event id="dynamic_generator_voltage_setpoint" appliesTo="GENERATOR"
+             label="Generator voltage setpoint step" lib="EventSetPointReal">
+        <connect var1="event_state1_value" to="MODEL" var2="generator_URefPu_value|generator_UsRefPu_value"/>
+      </event>
+    </eventFamily>
+  -->
+
+</events>

@@ -85,6 +85,39 @@ class CrvChangeLogEntry:
 
 
 @dataclass
+class EventConnection:
+    var1: str
+    id2: str      # "NETWORK", or the id of the .dyd model the event acts on
+    var2: str
+
+
+@dataclass
+class EventParameter:
+    name: str
+    value: str
+    type: str     # Dynawo type from the library descriptor: DOUBLE, BOOL, INT, STRING
+
+
+@dataclass
+class StagedEvent:
+    """One event the user has composed, waiting to be written.
+
+    Events accumulate before anything is written: the .dyd and .par they end up
+    in hold all of them at once, so each one is kept here — already resolved to
+    the model id, parameters and connections it will be written as — until the
+    user asks for the files."""
+    event_id: str          # the catalogue event it came from
+    label: str
+    target_id: str
+    kind: str              # "network" | "dynamic"
+    model_id: str          # id of the blackBoxModel to create, unique in the session
+    lib: str
+    parameters: list[EventParameter]
+    connections: list[EventConnection]
+    entry_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
+
+
+@dataclass
 class FileInfo:
     name: str
     size: int

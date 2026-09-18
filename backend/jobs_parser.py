@@ -266,3 +266,67 @@ def read_all_file_refs(jobs_path: str) -> dict:
     except Exception:
         pass
     return refs
+
+
+def write_dyd_reference_to_jobs(jobs_path: str, dyd_filename: str) -> int:
+    """Declare a .dyd in every <job> of a jobs file, and return how many were patched.
+
+    A job may already list several <dynModels>, and a new one is inserted right
+    after the last of them (or after <network>) rather than appended: Dynawo's
+    schema orders the children of <modeler>, and a <dynModels> landing after
+    <precompiledModels>/<modelicaModels> makes the file invalid. A job already
+    referencing this file is left untouched, so writing the events twice does
+    not declare them twice.
+    """
+    ET.register_namespace("dyn", _NS)
+    tree = ET.parse(jobs_path)
+    root = tree.getroot()
+
+    jobs = root.findall(f".//{{{_NS}}}job") or ([root] if root.tag == f"{{{_NS}}}job" else [])
+    patched = 0
+    for job in jobs:
+        modeler = job.find(f"{{{_NS}}}modeler")
+        if modeler is None:
+            modeler = ET.SubElement(job, f"{{{_NS}}}modeler")
+        children = list(modeler)
+        if any(c.tag == f"{{{_NS}}}dynModels" and c.get("dydFile") == dyd_filename for c in children):
+            continue
+        elem = ET.Element(f"{{{_NS}}}dynModels")
+        elem.set("dydFile", dyd_filename)
+        anchors = [i for i, c in enumerate(children)
+                   if c.tag in (f"{{{_NS}}}dynModels", f"{{{_NS}}}network")]
+        modeler.insert(anchors[-1] + 1 if anchors else 0, elem)
+        patched += 1
+
+    if patched:
+        ET.indent(tree, space="  ")
+        tree.write(jobs_path, xml_declaration=True, encoding="UTF-8")
+    return patched
+
+
+def remove_dyd_reference_from_jobs(jobs_path: str, dyd_filename: str) -> int:
+    """Drop every <dynModels dydFile="..."/> naming this file, and return how many.
+
+    The counterpart of write_dyd_reference_to_jobs: it is what takes a set of
+    events out of a job without touching the file itself, so the events can be
+    put back later by declaring them again.
+    """
+    ET.register_namespace("dyn", _NS)
+    tree = ET.parse(jobs_path)
+    root = tree.getroot()
+
+    jobs = root.findall(f".//{{{_NS}}}job") or ([root] if root.tag == f"{{{_NS}}}job" else [])
+    removed = 0
+    for job in jobs:
+        modeler = job.find(f"{{{_NS}}}modeler")
+        if modeler is None:
+            continue
+        for elem in modeler.findall(f"{{{_NS}}}dynModels"):
+            if elem.get("dydFile") == dyd_filename:
+                modeler.remove(elem)
+                removed += 1
+
+    if removed:
+        ET.indent(tree, space="  ")
+        tree.write(jobs_path, xml_declaration=True, encoding="UTF-8")
+    return removed
