@@ -58,6 +58,9 @@ interface FormResp {
   unresolved_fixed: { pattern: string; value: string }[]
   connections: Connection[]
   variables: { event: string[]; target: string[] }
+  // {variable: valueType} per side — a hand-made wire is only offered between
+  // variables of one type.
+  variable_types: { event: Record<string, string>; target: Record<string, string> }
 }
 
 // A wire as the user will have it written: either the proposal, or his own pick.
@@ -111,12 +114,36 @@ function FixedParameters({ form }: { form: FormResp }) {
 // Matching variables first — they are already ranked closest-first by the
 // backend — then the rest of the side's variables, so an override starts from
 // the plausible names without hiding the others.
-function variableOptions(matches: string[], all: string[]) {
-  const rest = all.filter(v => !matches.includes(v))
+function variableOptions(matches: string[], all: string[], types: Record<string, string>, onlyType?: string) {
+  // A variable of unknown type is kept: its descriptor saying nothing is no
+  // evidence it cannot be connected.
+  const fits = (v: string) => !onlyType || !types[v] || types[v] === onlyType
+  const option = (v: string) => ({
+    value: v,
+    label: types[v]
+      ? <Space size={6}><span>{v}</span><Tag style={{ fontSize: 11, marginInlineEnd: 0 }}>{types[v]}</Tag></Space>
+      : v,
+  })
+  const matching = matches.filter(fits)
+  const rest = all.filter(v => !matches.includes(v) && fits(v))
   return [
-    ...(matches.length ? [{ label: 'Matching the pattern', options: matches.map(v => ({ value: v, label: v })) }] : []),
-    ...(rest.length ? [{ label: 'Other variables', options: rest.map(v => ({ value: v, label: v })) }] : []),
+    ...(matching.length ? [{ label: 'Matching the pattern', options: matching.map(option) }] : []),
+    ...(rest.length ? [{ label: onlyType ? `Other ${onlyType} variables` : 'Other variables', options: rest.map(option) }] : []),
   ]
+}
+
+// Changing the event side of a wire can leave the object side of another type.
+// It is then moved to the closest variable of the right type — a match of the
+// pattern first — rather than kept as a pair that could not be connected.
+function rewire(w: Wire, side: 'var1' | 'var2', v: string, c: Connection, form: FormResp): Wire {
+  const next = { ...w, [side]: v }
+  if (side === 'var1') {
+    const wanted = form.variable_types.event[v]
+    const fits = (x: string | null) => !!x && (!wanted || !form.variable_types.target[x] || form.variable_types.target[x] === wanted)
+    if (!fits(next.var2))
+      next.var2 = c.var2_matches.find(fits) ?? form.variables.target.find(fits) ?? null
+  }
+  return next
 }
 
 // The .par is never named separately: it is written with the .dyd and only the
@@ -242,21 +269,22 @@ function StagedEditor({
       {form.connections.map((c, i) => {
         const wire = wires[i] ?? { var1: null, var2: null }
         const setWire = (side: 'var1' | 'var2', v: string) =>
-          setWires(prev => prev.map((w, j) => (j === i ? { ...w, [side]: v } : w)))
+          setWires(prev => prev.map((w, j) => (j === i ? rewire(w, side, v, c, form) : w)))
         return (
           <Space key={i} wrap align="end">
             <Space direction="vertical" size={2}>
               <Text type="secondary" style={{ fontSize: 12 }}>{form.event.lib} (the event)</Text>
               <Select showSearch style={{ width: 280 }} value={wire.var1}
                       onChange={v => setWire('var1', v)}
-                      options={variableOptions(c.var1_matches, form.variables.event)} />
+                      options={variableOptions(c.var1_matches, form.variables.event, form.variable_types.event)} />
             </Space>
             <Text type="secondary" style={{ paddingBottom: 6 }}>↔</Text>
             <Space direction="vertical" size={2}>
               <Text type="secondary" style={{ fontSize: 12 }}>{form.connect_to} (the object)</Text>
               <Select showSearch style={{ width: 280 }} value={wire.var2}
                       onChange={v => setWire('var2', v)}
-                      options={variableOptions(c.var2_matches, form.variables.target)} />
+                      options={variableOptions(c.var2_matches, form.variables.target, form.variable_types.target,
+                                          wire.var1 ? form.variable_types.event[wire.var1] : undefined)} />
             </Space>
           </Space>
         )
@@ -901,7 +929,7 @@ export default function Events() {
             {form.connections.map((c, i) => {
               const wire = wires[i] ?? { var1: null, var2: null }
               const setWire = (side: 'var1' | 'var2', v: string) =>
-                setWires(prev => prev.map((w, j) => (j === i ? { ...w, [side]: v } : w)))
+                setWires(prev => prev.map((w, j) => (j === i ? rewire(w, side, v, c, form) : w)))
               const editable = !form.event.automatic || !autoConnect
 
               return (
@@ -941,7 +969,7 @@ export default function Events() {
                           disabled={!editable}
                           placeholder="event variable"
                           onChange={v => setWire('var1', v)}
-                          options={variableOptions(c.var1_matches, form.variables.event)}
+                          options={variableOptions(c.var1_matches, form.variables.event, form.variable_types.event)}
                         />
                       </Space>
                       <Text type="secondary" style={{ paddingTop: 18 }}>↔</Text>
@@ -954,7 +982,8 @@ export default function Events() {
                           disabled={!editable}
                           placeholder="object variable"
                           onChange={v => setWire('var2', v)}
-                          options={variableOptions(c.var2_matches, form.variables.target)}
+                          options={variableOptions(c.var2_matches, form.variables.target, form.variable_types.target,
+                                          wire.var1 ? form.variable_types.event[wire.var1] : undefined)}
                         />
                       </Space>
                     </Space>

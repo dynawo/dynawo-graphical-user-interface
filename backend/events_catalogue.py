@@ -175,29 +175,64 @@ def match_variables(pattern: str, variables: list[str]) -> list[str]:
     return sorted((v for v in variables if low in v.lower()), key=lambda v: _rank(v, pattern))
 
 
-def match_connection(pattern: dict, var1_variables: list[str], var2_variables: list[str]) -> dict:
+def _same_type(a: str, b: str, var1_types: dict[str, str], var2_types: dict[str, str]) -> bool:
+    """Whether two variables may be connected, as far as their types tell.
+
+    An unknown type does not forbid anything: a descriptor that does not declare
+    one is no evidence of a mismatch."""
+    ta, tb = var1_types.get(a), var2_types.get(b)
+    return not ta or not tb or ta == tb
+
+
+def match_connection(
+    pattern: dict,
+    var1_variables: list[str],
+    var2_variables: list[str],
+    var1_types: dict[str, str] | None = None,
+    var2_types: dict[str, str] | None = None,
+) -> dict:
     """Apply one <connectPattern> to the variables of the two sides.
 
     Returns the candidates found on each side and the pair that would be wired
     — `resolved` when both sides matched, `ambiguous` when at least one side
     matched several variables, in which case the proposal is a best guess the
     user is expected to confirm.
+
+    With the variables' types, the pair proposed is always of one type: the
+    closest event-side match that has a same-typed match on the object side,
+    paired with the closest of those. A name close to the fragment but of
+    another type is never proposed — it could not be connected.
     """
+    t1, t2 = var1_types or {}, var2_types or {}
     var1_matches = match_variables(pattern["var1"], var1_variables)
     var2_matches = match_variables(pattern["var2"], var2_variables)
+
+    var1 = var2 = None
+    for candidate in var1_matches:
+        compatible = [v for v in var2_matches if _same_type(candidate, v, t1, t2)]
+        if compatible:
+            var1, var2 = candidate, compatible[0]
+            break
+
     return {
         "pattern_var1": pattern["var1"],
         "pattern_var2": pattern["var2"],
         "var1_matches": var1_matches,
         "var2_matches": var2_matches,
-        "var1":         var1_matches[0] if var1_matches else None,
-        "var2":         var2_matches[0] if var2_matches else None,
-        "resolved":     bool(var1_matches and var2_matches),
+        "var1":         var1,
+        "var2":         var2,
+        "resolved":     var1 is not None,
         "ambiguous":    len(var1_matches) > 1 or len(var2_matches) > 1,
     }
 
 
-def patterns_resolve(event: dict, var1_variables: list[str], var2_variables: list[str]) -> bool:
+def patterns_resolve(
+    event: dict,
+    var1_variables: list[str],
+    var2_variables: list[str],
+    var1_types: dict[str, str] | None = None,
+    var2_types: dict[str, str] | None = None,
+) -> bool:
     """Whether every connection of `event` can be built from these variables.
 
     What decides that an event is applicable to a target: the catalogue may
@@ -205,6 +240,6 @@ def patterns_resolve(event: dict, var1_variables: list[str], var2_variables: lis
     An event declaring no pattern is left to the user, hence applicable.
     """
     return all(
-        match_connection(p, var1_variables, var2_variables)["resolved"]
+        match_connection(p, var1_variables, var2_variables, var1_types, var2_types)["resolved"]
         for p in event["patterns"]
     )

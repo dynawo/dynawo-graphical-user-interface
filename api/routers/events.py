@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from api.dependencies import get_session
 from api.dyd_models import get_dyd_models
 from api.session_store import UserSession
-from backend.desc_parser import get_lib_parameter_details, get_lib_symbols
+from backend.desc_parser import get_lib_parameter_details, get_lib_symbols, get_lib_variable_types
 from backend.dyd_parser import parse_dyd
 from backend.events_catalogue import (
     CATALOGUE_PATH,
@@ -271,6 +271,20 @@ class _LibSymbols:
         return [v.replace(NETWORK_ID_PLACEHOLDER, static_id)
                 for v in self.variables(NETWORK_MODEL_LIB)]
 
+    def variable_types(self, lib: str) -> dict[str, str]:
+        """{variable: valueType} of a library — what a connection must agree on."""
+        if not self.available:
+            return {}
+        key = f"types:{lib}"
+        if key not in self._params:
+            self._params[key] = get_lib_variable_types(self.exe, lib)
+        return self._params[key]
+
+    def network_variable_types(self, static_id: str) -> dict[str, str]:
+        """The network model's variable types as they read for one object."""
+        return {name.replace(NETWORK_ID_PLACEHOLDER, static_id): t
+                for name, t in self.variable_types(NETWORK_MODEL_LIB).items()}
+
     def parameters(self, lib: str) -> list[dict]:
         if not self.available:
             return []
@@ -312,7 +326,8 @@ def _events_for_network_target(events: list[dict], static_id: str, equipment_typ
     network_vars = symbols.network_variables(static_id)
     return [
         e["id"] for e in candidates
-        if patterns_resolve(e, symbols.variables(e["lib"]), network_vars)
+        if patterns_resolve(e, symbols.variables(e["lib"]), network_vars,
+                            symbols.variable_types(e["lib"]), symbols.network_variable_types(static_id))
     ]
 
 
@@ -330,7 +345,8 @@ def _events_for_dynamic_target(events: list[dict], lib: str, equipment_type: str
     if not lib_vars:
         return [e["id"] for e in dynamic if e["equipment_type"] == equipment_type]
     return [e["id"] for e in dynamic
-            if patterns_resolve(e, symbols.variables(e["lib"]), lib_vars)]
+            if patterns_resolve(e, symbols.variables(e["lib"]), lib_vars,
+                                symbols.variable_types(e["lib"]), symbols.variable_types(lib))]
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -494,10 +510,13 @@ def get_event_form(
             raise HTTPException(status_code=404, detail=f"No dynamic model '{target_id}' in the .dyd files")
         lib = info["lib"]
         target_variables = symbols.variables(lib)
+        target_types = symbols.variable_types(lib)
     else:
         target_variables = symbols.network_variables(target_id)
+        target_types = symbols.network_variable_types(target_id)
 
     event_variables = symbols.variables(event["lib"])
+    event_types = symbols.variable_types(event["lib"])
     descriptor = get_lib_parameter_details(symbols.exe, event["lib"]) if symbols.available else []
 
     # A fixed value that does not designate exactly one parameter of this
@@ -511,7 +530,7 @@ def get_event_form(
     ]
 
     connections = [
-        match_connection(pattern, event_variables, target_variables)
+        match_connection(pattern, event_variables, target_variables, event_types, target_types)
         for pattern in event["patterns"]
     ]
 
@@ -541,6 +560,9 @@ def get_event_form(
         "unresolved_fixed":     unresolved_fixed,
         "connections":          connections,
         "variables":            {"event": event_variables, "target": target_variables},
+        # So a user wiring by hand is only offered variables of the same type as
+        # the one picked on the other side.
+        "variable_types":       {"event": event_types, "target": target_types},
     }
 
 

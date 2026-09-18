@@ -88,3 +88,25 @@ def get_lib_parameter_details(dynawo_exe: str, lib: str) -> list[dict]:
         if p.get("name")
     ]
     return sorted(params, key=lambda p: p["name"])
+
+
+def get_lib_variable_types(dynawo_exe: str, lib: str) -> dict[str, str]:
+    """Return {variable name: valueType} for a library's ddb/<lib>.desc.xml.
+
+    The type is what makes a connection sound: Dynawo wires two variables into
+    one equation, and an INT state tied to a DOUBLE setpoint is a model that
+    either fails to build or means nothing. Variables without a declared type
+    are left out rather than guessed. Empty when the file is missing.
+    """
+    desc_path = _desc_path(dynawo_exe, lib)
+    if not desc_path:
+        return {}
+    try:
+        root = ET.parse(desc_path).getroot()
+    except Exception:
+        return {}
+    return {
+        v.get("name"): v.get("valueType", "").upper()
+        for v in root.findall(f".//{{{_NS}}}variable")
+        if v.get("name") and v.get("valueType")
+    }
