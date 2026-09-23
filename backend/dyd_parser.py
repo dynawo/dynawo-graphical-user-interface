@@ -51,6 +51,50 @@ def connections_from_root(root: ET.Element) -> list[dict]:
     ]
 
 
+def macro_connections_from_root(root: ET.Element, models: dict[str, dict]) -> list[dict]:
+    """The connections a .dyd expresses through macro connectors, expanded.
+
+    Dynawo lets a file declare a wiring once as a <macroConnector> and apply it
+    with <macroConnect>; powsybl-dynawo writes the events of a security analysis
+    that way, so a reader that only knows <connect> sees those models wired to
+    nothing. The placeholders a macro connector may carry (@STATIC_ID@, @NAME@,
+    @INDEX@) are filled from the macroConnect attributes and from the staticId
+    of the models being connected — for a network event, that static id is
+    precisely the equipment the event acts on.
+    """
+    connectors: dict[str, list[tuple[str, str]]] = {}
+    for mc in root.findall(f".//{{{_NS}}}macroConnector"):
+        mc_id = mc.get("id")
+        if mc_id:
+            connectors[mc_id] = [
+                (c.get("var1", ""), c.get("var2", ""))
+                for c in mc.findall(f"{{{_NS}}}connect")
+            ]
+
+    connections: list[dict] = []
+    for use in root.findall(f".//{{{_NS}}}macroConnect"):
+        pairs = connectors.get(use.get("connector", ""))
+        if not pairs:
+            continue
+        id1, id2 = use.get("id1", ""), use.get("id2", "")
+        static1 = models.get(id1, {}).get("static_id", "")
+        static2 = models.get(id2, {}).get("static_id", "")
+        for var1, var2 in pairs:
+            connections.append({
+                "id1":  id1,
+                "var1": _fill(var1, use.get("index1"), use.get("name1"), static1 or static2),
+                "id2":  id2,
+                "var2": _fill(var2, use.get("index2"), use.get("name2"), static2 or static1),
+            })
+    return connections
+
+
+def _fill(var: str, index: str | None, name: str | None, static_id: str) -> str:
+    for placeholder, value in (("@INDEX@", index), ("@NAME@", name), ("@STATIC_ID@", static_id)):
+        var = var.replace(placeholder, value or "")
+    return var
+
+
 def parse_dyd(content: bytes) -> dict[str, dict]:
     """Return {dyn_id: {lib, dyn_id, static_id, parFile, parId}} for every blackBoxModel.
 

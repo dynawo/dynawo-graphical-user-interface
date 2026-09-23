@@ -82,7 +82,13 @@ def build_events_dyd(
 
 
 def _strip_events(root: ET.Element, event_libs: set[str]) -> tuple[ET.Element, set[str]]:
-    """Remove the event models of a .dyd and the connections wiring them."""
+    """Remove the event models of a .dyd and everything wiring them.
+
+    Both forms of wiring go: a plain <connect>, and a <macroConnect> applying a
+    macro connector — the form powsybl-dynawo writes. A macroConnect left behind
+    would name a model the file no longer declares, which Dynawo rejects. The
+    <macroConnector> definitions themselves stay: they are shared, and an unused
+    one is harmless."""
     event_ids: set[str] = set()
     dropped_par_ids: set[str] = set()
     for bbm in root.findall(f"{{{_NS}}}blackBoxModel"):
@@ -91,9 +97,10 @@ def _strip_events(root: ET.Element, event_libs: set[str]) -> tuple[ET.Element, s
             if bbm.get("parId"):
                 dropped_par_ids.add(bbm.get("parId"))
             root.remove(bbm)
-    for conn in root.findall(f"{{{_NS}}}connect"):
-        if conn.get("id1") in event_ids or conn.get("id2") in event_ids:
-            root.remove(conn)
+    for tag in ("connect", "macroConnect"):
+        for conn in root.findall(f"{{{_NS}}}{tag}"):
+            if conn.get("id1") in event_ids or conn.get("id2") in event_ids:
+                root.remove(conn)
     return root, dropped_par_ids
 
 
