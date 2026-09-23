@@ -8,7 +8,12 @@
 # SPDX-License-Identifier: MPL-2.0
 #
 
-from backend.dyd_parser import connections_from_root, models_from_root, parse_dyd_root
+from backend.dyd_parser import (
+    connections_from_root,
+    macro_connections_from_root,
+    models_from_root,
+    parse_dyd_root,
+)
 
 NETWORK_MODEL_ID = "NETWORK"
 
@@ -41,7 +46,7 @@ def read_events(
     """
     root = parse_dyd_root(dyd_content)
     models = models_from_root(root)
-    connections = connections_from_root(root)
+    connections = connections_from_root(root) + macro_connections_from_root(root, models)
     event_libs = {e["lib"] for e in catalogue}
 
     events: list[dict] = []
@@ -58,7 +63,14 @@ def read_events(
             continue
 
         kind = "network" if all(w["id2"] == NETWORK_MODEL_ID for w in wires) else "dynamic"
-        target_id = _network_target(wires, set(object_types)) if kind == "network" else wires[0]["id2"]
+        if kind == "network":
+            # The staticId of the event model names the equipment outright, and
+            # is what a macro-connected event relies on; the variable name is
+            # only read when there is none.
+            target_id = (info["static_id"] if info["static_id"] in object_types
+                         else _network_target(wires, set(object_types)))
+        else:
+            target_id = wires[0]["id2"]
         if not target_id:
             skipped.append({
                 "model_id": model_id,

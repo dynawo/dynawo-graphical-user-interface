@@ -314,6 +314,19 @@ class _LibSymbols:
         return resolved, unresolved
 
 
+def _modelled_static_ids(models: dict[str, dict], events: list[dict]) -> set[str]:
+    """The static ids a dynamic model stands for, and which the network model
+    therefore does not simulate.
+
+    Event models are left out although they may carry a staticId of their own —
+    powsybl-dynawo writes the events of a security analysis that way. Such a
+    model acts on the equipment, it does not replace it: counting it here would
+    hide that equipment from the network list, and refuse an event on it."""
+    event_libs = {e["lib"] for e in events}
+    return {info["static_id"] for info in models.values()
+            if info["static_id"] and info["lib"] not in event_libs}
+
+
 def _fits_equipment(event: dict, equipment_type: str) -> bool:
     """Whether an event is meant for this kind of object.
 
@@ -459,7 +472,7 @@ def list_targets(
     unsupported: dict[tuple, dict] = {}
     models = _dyd_models(session, jobs_file)
     iidm_types = _iidm_types(session)
-    modelled_static_ids = {i["static_id"] for i in models.values() if i["static_id"]}
+    modelled_static_ids = _modelled_static_ids(models, events)
 
     targets: list[dict] = []
 
@@ -493,8 +506,15 @@ def list_targets(
                 })
 
     if kind in (None, "dynamic"):
+        # The events already written into the job are models like any other, and
+        # a job may declare several .dyd files holding some. They are not
+        # equipment an event can act on, so they are left out of the list — and
+        # out of what it reports as unsupported, where they would be noise.
+        event_libs = {e["lib"] for e in events}
         for dyn_id, info in models.items():
             lib = info["lib"]
+            if lib in event_libs:
+                continue
             iidm_type = iidm_types.get(info["static_id"], "")
             equipment = _IIDM_TO_EQUIPMENT.get(iidm_type) or _infer_equipment_type(lib)
             event_ids = _events_for_dynamic_target(events, lib, equipment, symbols)
@@ -851,6 +871,13 @@ def _validated_event(event_id: str, kind: str) -> dict:
     return event
 
 
+def _modelled_by_id(models: dict[str, dict], events: list[dict]) -> set[str]:
+    """Ids of the models that stand for a piece of equipment — events excluded."""
+    event_libs = {e["lib"] for e in events}
+    return {dyn_id for dyn_id, info in models.items()
+            if info["static_id"] and info["lib"] not in event_libs}
+
+
 def _target_variables(session: UserSession, symbols: _LibSymbols, kind: str,
                       target_id: str, jobs_file: str | None) -> list[str]:
     """The variables the object offers the second side of a connection.
@@ -859,8 +886,10 @@ def _target_variables(session: UserSession, symbols: _LibSymbols, kind: str,
     network model does not simulate that object, so the NETWORK variable the
     event would be wired to exists in name only."""
     if kind == "network":
-        modelled = next((m for m in _dyd_models(session, jobs_file).values()
-                         if m["static_id"] == target_id), None)
+        models = _dyd_models(session, jobs_file)
+        modelled = next((m for m in models.values()
+                         if m["static_id"] == target_id
+                         and m["dyn_id"] in _modelled_by_id(models, _catalogue())), None)
         if modelled is not None:
             raise HTTPException(
                 status_code=422,
@@ -1092,6 +1121,10 @@ def list_event_files(jobs_file: str | None = None, session: UserSession = Depend
     catalogue offers — not by its name, so a file written elsewhere is found too.
     `jobs_files` names the jobs declaring each one, since rewriting a file
     changes every job that points at it.
+
+    Given a job, its own events files are listed, plus those no job declares:
+    a file just taken out of a job — or written without one — would otherwise
+    disappear from the page, with no way left to open it or put it back.
     """
     if jobs_file and not session.session_manager.has_file(jobs_file):
         raise HTTPException(status_code=404, detail=f"{jobs_file} not found in session")
@@ -1104,7 +1137,7 @@ def list_event_files(jobs_file: str | None = None, session: UserSession = Depend
 
     files = []
     for dyd_name in _files_of_type(session, "dyd"):
-        if wanted is not None and dyd_name not in wanted:
+        if wanted is not None and dyd_name not in wanted and declared_by.get(dyd_name):
             continue
         events, skipped, other_models = _scan_dyd(session, dyd_name, with_parameters=False)
         if events:
