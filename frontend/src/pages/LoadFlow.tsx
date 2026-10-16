@@ -20,6 +20,7 @@ import {
   UndoOutlined, WarningOutlined,
 } from '@ant-design/icons'
 import client from '../api/client'
+import PowsyblParamsForm, { type PowsyblParamSpec } from '../components/PowsyblParamsForm'
 import DirectoryPicker from './DirectoryPicker'
 import SimOutputsModal, { type ConstraintItem, type LostEquipmentItem, type TimelineEvent } from '../components/SimOutputsModal'
 
@@ -47,7 +48,8 @@ interface ComponentResult {
 interface LfResult {
   ok: boolean
   provider: string
-  output_filename: string
+  // null when the main component did not converge: no result network is written
+  output_filename: string | null
   components: ComponentResult[]
   debug_files?: string[]
 }
@@ -104,6 +106,24 @@ const BALANCE_TYPE_LABELS: Record<string, string> = {
   PROPORTIONAL_TO_CONFORM_LOAD:                   'Prop. to conform load',
 }
 
+// DynaFlow has no balance type of its own: pypowsybl translates balance_type
+// into DynaFlow-launcher's ActivePowerCompensation, and only these three give
+// distinct values — every other balance type falls back to PMax.
+const DYNAFLOW_COMPENSATION_LABELS: Record<string, string> = {
+  PROPORTIONAL_TO_GENERATION_P_MAX: 'PMax',
+  PROPORTIONAL_TO_GENERATION_P:     'P',
+  PROPORTIONAL_TO_LOAD:             'targetP',
+}
+
+// The generic fields DynaFlow does read, under the name of the
+// DynaFlow-launcher setting each one becomes.
+const DYNAFLOW_FIELD_LABELS: Record<string, string> = {
+  balance_type:                         'Active power compensation',
+  use_reactive_limits:                  'Reactive limits (off: InfiniteReactiveLimits)',
+  shunt_compensator_voltage_control_on: 'Shunt regulation (ShuntRegulationOn)',
+  read_slack_bus:                       'Read slack bus (off: AutomaticSlackBusOn)',
+}
+
 const CONNECTED_COMPONENT_LABELS: Record<string, string> = {
   MAIN: 'Main component only',
   ALL:  'All components',
@@ -112,9 +132,11 @@ const CONNECTED_COMPONENT_LABELS: Record<string, string> = {
 const FIELD_LABELS: Record<string, string> = {
   voltage_init_mode:              'Voltage initialisation',
   transformer_voltage_control_on: 'Transformer voltage control',
+  use_reactive_limits:            'Generator reactive limits',
   no_generator_reactive_limits:   'No generator reactive limits',
   phase_shifter_regulation_on:    'Phase shifter regulation',
   twt_split_shunt_admittance:     'Split shunt admittances (TWT)',
+  shunt_compensator_voltage_control_on: 'Shunt voltage control',
   simul_shunt:                    'Simulate shunt',
   read_slack_bus:                 'Read slack bus',
   write_slack_bus:                'Write slack bus',
@@ -136,101 +158,6 @@ function statusTag(status: string) {
   }
 }
 
-// ── Provider parameters form (typed, spec-driven per provider) ────────────────
-
-interface ProviderParamSpec {
-  name: string
-  category: string
-  description: string
-  type: 'BOOLEAN' | 'STRING' | 'STRING_LIST' | 'DOUBLE' | 'INTEGER'
-  default: unknown
-  possible_values: string[]
-}
-
-function ProviderParamsForm({
-  specs, value, onChange,
-}: {
-  specs: ProviderParamSpec[]
-  value: Record<string, unknown>
-  onChange: (v: Record<string, unknown>) => void
-}) {
-  const set = (name: string, v: unknown) => onChange({ ...value, [name]: v })
-
-  const renderControl = (spec: ProviderParamSpec) => {
-    const val = value[spec.name] ?? spec.default
-    switch (spec.type) {
-      case 'BOOLEAN':
-        return <Switch size="small" checked={!!val} onChange={v => set(spec.name, v)} />
-      case 'STRING_LIST':
-        return (
-          <Select
-            size="small" mode={spec.possible_values.length ? 'multiple' : 'tags'}
-            value={(val as string[]) ?? []}
-            onChange={v => set(spec.name, v)}
-            style={{ width: 260 }}
-            options={spec.possible_values.map(v => ({ label: v, value: v }))}
-          />
-        )
-      case 'DOUBLE':
-      case 'INTEGER':
-        return (
-          <InputNumber
-            size="small" value={val as number | null}
-            step={spec.type === 'INTEGER' ? 1 : undefined}
-            precision={spec.type === 'INTEGER' ? 0 : undefined}
-            onChange={v => set(spec.name, v)}
-            style={{ width: 140 }}
-          />
-        )
-      default: // STRING
-        return spec.possible_values.length
-          ? (
-            <Select
-              size="small" value={val as string} onChange={v => set(spec.name, v)}
-              style={{ width: 200 }}
-              options={spec.possible_values.map(v => ({ label: v, value: v }))}
-            />
-          )
-          : (
-            <Input
-              size="small" value={val as string} onChange={e => set(spec.name, e.target.value)}
-              style={{ width: 200 }}
-            />
-          )
-    }
-  }
-
-  const row = (spec: ProviderParamSpec) => (
-    <Space align="center" key={spec.name} style={{ marginBottom: 6 }}>
-      <Tooltip title={spec.description}>
-        <Text style={{ fontSize: 12, color: '#888', minWidth: 200, display: 'inline-block' }}>
-          {spec.name}
-        </Text>
-      </Tooltip>
-      {renderControl(spec)}
-    </Space>
-  )
-
-  const byCategory: Record<string, ProviderParamSpec[]> = {}
-  for (const s of specs) (byCategory[s.category || '_'] ??= []).push(s)
-  const categories = Object.keys(byCategory)
-
-  if (categories.length === 1 && categories[0] === '_') {
-    return <Flex vertical>{specs.map(row)}</Flex>
-  }
-
-  return (
-    <Collapse
-      size="small"
-      items={categories.sort().map(cat => ({
-        key: cat,
-        label: cat === '_' ? 'General' : cat,
-        children: <Flex vertical>{byCategory[cat].map(row)}</Flex>,
-      }))}
-    />
-  )
-}
-
 // ── Parameter form ─────────────────────────────────────────────────────────────
 
 function ParamForm({
@@ -242,7 +169,7 @@ function ParamForm({
   ac: boolean; onAcChange: (v: boolean) => void
   lfParams: LfDefaults; onLfParamsChange: (p: LfDefaults) => void
   enumOptions: EnumOptions; defaults: LfDefaults
-  providerParamSpecs: ProviderParamSpec[]
+  providerParamSpecs: PowsyblParamSpec[]
 }) {
   const set = (patch: LfDefaults) => onLfParamsChange({ ...lfParams, ...patch })
   const has = (k: string) => k in defaults
@@ -254,24 +181,25 @@ function ParamForm({
       {control}
     </Space>
   )
-  const boolRow = (field: string) => {
+  const boolRow = (field: string, label?: string) => {
     if (!has(field)) return null
     return row(
-      FIELD_LABELS[field] ?? field,
+      label ?? FIELD_LABELS[field] ?? field,
       <Switch size="small"
         checked={!!lfParams[field]}
         onChange={v => set({ [field]: v })}
       />
     )
   }
-  const enumRow = (field: string, optLabels: Record<string, string>, optKey?: string) => {
-    const key = optKey ?? field
-    if (!has(field) || !enumOptions[key]?.length) return null
+  // onlyLabelled: offer only the options optLabels names.
+  const enumRow = (field: string, optLabels: Record<string, string>, label?: string, onlyLabelled = false) => {
+    const options = (enumOptions[field] ?? []).filter(k => !onlyLabelled || k in optLabels)
+    if (!has(field) || !options.length) return null
     return row(
-      FIELD_LABELS[field] ?? field,
+      label ?? FIELD_LABELS[field] ?? field,
       <Select size="small" value={lfParams[field] as string} style={{ width: 240 }}
         onChange={v => set({ [field]: v })}
-        options={(enumOptions[key] ?? []).map(k => ({ value: k, label: optLabels[k] ?? k }))}
+        options={options.map(k => ({ value: k, label: optLabels[k] ?? k }))}
       />
     )
   }
@@ -280,7 +208,7 @@ function ParamForm({
     <div style={{ marginTop: 8, marginBottom: 8 }}>
       <Text style={{ fontSize: 12, color: '#888' }}>{FIELD_LABELS.provider_parameters}</Text>
       <div style={{ marginTop: 4 }}>
-        <ProviderParamsForm
+        <PowsyblParamsForm
           specs={providerParamSpecs}
           value={(lfParams.provider_parameters as Record<string, unknown>) ?? {}}
           onChange={v => set({ provider_parameters: v })}
@@ -290,10 +218,20 @@ function ParamForm({
   )
 
   // DynaFlow ignores nearly all generic load-flow fields — DC is unsupported,
-  // and most booleans/enums are silently replaced by the IIDM network setup.
-  // Only its own provider parameters actually take effect, so that's all we show.
+  // and voltage_init_mode goes through the worker's config (StartingPointMode).
+  // pypowsybl does translate four of them into DynaFlow-launcher settings, so
+  // those are shown, under that setting's name, with its own parameters.
   if (provider === 'DynaFlow') {
-    return <Flex vertical gap={0}>{providerParamsSection}</Flex>
+    const L = DYNAFLOW_FIELD_LABELS
+    return (
+      <Flex vertical gap={0}>
+        {enumRow('balance_type', DYNAFLOW_COMPENSATION_LABELS, L.balance_type, true)}
+        {boolRow('use_reactive_limits', L.use_reactive_limits)}
+        {boolRow('shunt_compensator_voltage_control_on', L.shunt_compensator_voltage_control_on)}
+        {boolRow('read_slack_bus', L.read_slack_bus)}
+        {providerParamsSection}
+      </Flex>
+    )
   }
 
   return (
@@ -323,8 +261,10 @@ function ParamForm({
       {boolRow('distributed_slack')}
       {boolRow('phase_shifter_regulation_on')}
       {boolRow('transformer_voltage_control_on')}
+      {boolRow('use_reactive_limits')}
       {boolRow('no_generator_reactive_limits')}
       {boolRow('twt_split_shunt_admittance')}
+      {boolRow('shunt_compensator_voltage_control_on')}
       {boolRow('simul_shunt')}
       {boolRow('read_slack_bus')}
       {boolRow('write_slack_bus')}
@@ -342,7 +282,7 @@ function ResultDisplay({ result }: { result: LfResult }) {
   const [outputsOpen, setOutputsOpen] = useState(false)
 
   const handleViewInNetworkView = () => {
-    navigate(`/network-view?iidmFile=${encodeURIComponent(result.output_filename)}`)
+    if (result.output_filename) navigate(`/network-view?iidmFile=${encodeURIComponent(result.output_filename)}`)
   }
 
   const debugFiles = result.debug_files ?? []
@@ -379,11 +319,17 @@ function ResultDisplay({ result }: { result: LfResult }) {
           <>
             <Text strong>{allConverged ? `${runLabel} converged` : `${runLabel} did not fully converge`}</Text>
             <br />
-            Result saved as <Text code>{result.output_filename}</Text> — available in <Text strong>Files</Text>.
-            {' '}
-            <Button size="small" type="link" style={{ padding: 0 }} onClick={handleViewInNetworkView}>
-              Open in Network View
-            </Button>
+            {result.output_filename ? (
+              <>
+                Result saved as <Text code>{result.output_filename}</Text> — available in <Text strong>Files</Text>.
+                {' '}
+                <Button size="small" type="link" style={{ padding: 0 }} onClick={handleViewInNetworkView}>
+                  Open in Network View
+                </Button>
+              </>
+            ) : (
+              <>No result network written: the state a failed run stops in is not a load-flow solution.</>
+            )}
             {hasOutputs && (
               <>
                 {' '}
@@ -669,7 +615,7 @@ function LfPanel({
   const [saved] = useState<SavedLfSelection | null>(() => loadLfSelection(provider))
   const [ac, setAc] = useState(true)
   const [lfParams, setLfParams] = useState<LfDefaults>({ ...defaults })
-  const [providerParamSpecs, setProviderParamSpecs] = useState<ProviderParamSpec[]>([])
+  const [providerParamSpecs, setPowsyblParamSpecs] = useState<PowsyblParamSpec[]>([])
   const [inputFile, setInputFile] = useState<string | null>(saved?.inputFile ?? null)
   const [outputBaseName, setOutputBaseName] = useState(saved?.outputBaseName ?? '')
   const [iidmVersion, setIidmVersion] = useState('1.5')
@@ -701,14 +647,14 @@ function LfPanel({
   // this provider's spec defaults, then whatever the user last chose.
   useEffect(() => {
     Promise.all([
-      client.get<ProviderParamSpec[]>(`/loadflow/provider-parameters/${provider}`),
+      client.get<PowsyblParamSpec[]>(`/loadflow/provider-parameters/${provider}`),
       client.get<{ parameters: SavedLfParams }>(`/loadflow/saved-parameters/${provider}`)
         .catch(() => ({ data: { parameters: {} as SavedLfParams } })),
     ])
       .then(([specRes, savedRes]) => {
         const specs = specRes.data
         const savedParams = savedRes.data.parameters ?? {}
-        setProviderParamSpecs(specs)
+        setPowsyblParamSpecs(specs)
         const specDefaults = Object.fromEntries(specs.map(s => [s.name, s.default]))
         const savedPp = (savedParams.lfParams?.provider_parameters as Record<string, unknown>) ?? {}
         const restored: Required<SavedLfParams> = {
@@ -950,7 +896,7 @@ function LfPanel({
         </Space>
       )}
 
-      {error  && <Alert type="error"   description={error}  style={{ marginTop: 12 }} />}
+      {error  && <Alert type="error"   description={error}  style={{ marginTop: 12, whiteSpace: 'pre-line' }} />}
       {result && result.provider === provider && <ResultDisplay result={result} />}
     </Card>
   )

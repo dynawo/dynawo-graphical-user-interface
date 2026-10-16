@@ -120,3 +120,20 @@ def clear_loadflow_parameters(provider: str) -> None:
     def mutate(cfg: dict) -> None:
         cfg.setdefault("loadflow_parameters", {}).pop(provider, None)
     update_user_config(mutate)
+
+
+def get_network_import_parameters(fmt: str) -> dict:
+    """Return the import parameters saved for a network format, or {} if none."""
+    return load_user_config().get("network_import_parameters", {}).get(fmt, {})
+
+
+def save_network_import_parameters(fmt: str, params: dict) -> None:
+    """Persist the import parameters chosen for a network format; they are used
+    for every file of that format converted afterwards. {} forgets them."""
+    def mutate(cfg: dict) -> None:
+        saved = cfg.setdefault("network_import_parameters", {})
+        if params:
+            saved[fmt] = params
+        else:
+            saved.pop(fmt, None)
+    update_user_config(mutate)

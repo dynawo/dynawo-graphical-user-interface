@@ -185,6 +185,17 @@ def _reapply_crv_reference(session: UserSession, debug_files: list[str]) -> None
             pass  # best-effort — the run itself already succeeded
 
 
+def _register_session_files(session: UserSession, names: list[str]) -> None:
+    """Register the files a DynaFlow run copied into the session."""
+    for name in names:
+        try:
+            info = session.session_manager.register_existing_file(name)
+            session.uploaded_files_info[name] = {"size": info.size, "ftype": info.ftype}
+        except Exception:
+            pass  # best-effort — never turns a run's outcome into an error
+    _reapply_crv_reference(session, names)
+
+
 @router.post("/run")
 def run_loadflow(req: LfRunRequest, session: UserSession = Depends(get_session)):
     input_name = req.input_filename or session.network_name
@@ -223,23 +234,23 @@ def run_loadflow(req: LfRunRequest, session: UserSession = Depends(get_session))
                 raise HTTPException(status_code=500, detail=f"Failed to load network: {exc}")
             if exc.stage == "export":
                 raise HTTPException(status_code=500, detail=f"Failed to export result network: {exc}")
-            raise HTTPException(status_code=500, detail=f"{run_label} failed: {exc}")
+            detail = f"{run_label} failed: {exc}"
+            if exc.kept_files:
+                _register_session_files(session, exc.kept_files)
+                detail += f"\nFiles kept in the session: {', '.join(exc.kept_files)}"
+            raise HTTPException(status_code=500, detail=detail)
 
-    try:
-        info = session.session_manager.register_existing_file(out_name)
-        # Always tag as 'iidm': detect_dynawo_type may return None for some
-        # XIIDM namespace variants, but we know this file is always an IIDM.
-        session.uploaded_files_info[out_name] = {"size": info.size, "ftype": "iidm"}
-    except Exception:
-        pass  # export succeeded; registration failure is non-fatal
-
-    for name in serialised.get("debug_files", []):
+    # output_filename is None when the run did not converge: nothing was written.
+    if serialised["output_filename"] is not None:
         try:
-            info = session.session_manager.register_existing_file(name)
-            session.uploaded_files_info[name] = {"size": info.size, "ftype": info.ftype}
+            info = session.session_manager.register_existing_file(out_name)
+            # Always tag as 'iidm': detect_dynawo_type may return None for some
+            # XIIDM namespace variants, but we know this file is always an IIDM.
+            session.uploaded_files_info[out_name] = {"size": info.size, "ftype": "iidm"}
         except Exception:
-            pass  # best-effort — the run itself already succeeded
-    _reapply_crv_reference(session, serialised.get("debug_files", []))
+            pass  # export succeeded; registration failure is non-fatal
+
+    _register_session_files(session, serialised.get("debug_files", []))
 
     session.lf_result = serialised
     return serialised

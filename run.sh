@@ -58,7 +58,7 @@ PIDS=()
 
 cleanup() {
     # Avoid re-entrancy while we tear down.
-    trap - INT TERM EXIT
+    trap - HUP INT TERM EXIT
     info "Shutting down..."
     for pid in "${PIDS[@]}"; do
         # Kill the whole process group so uvicorn's --reload workers and
@@ -67,7 +67,10 @@ cleanup() {
     done
     wait 2>/dev/null || true
 }
-trap cleanup INT TERM EXIT
+# HUP too: closing the terminal hangs up run.sh only — setsid keeps the
+# backend and vite out of the terminal's session — so without it they outlive
+# the terminal, keep ports 8000/5173, and log to a tty that no longer exists.
+trap cleanup HUP INT TERM EXIT
 
 # --- launch ------------------------------------------------------------------
 

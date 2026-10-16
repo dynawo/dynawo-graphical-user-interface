@@ -22,17 +22,24 @@ import pypowsybl.security as sa
 from backend.dyd_parser import parse_dyd
 from backend.par_writer import relocate_table_files
 from backend.powsybl_config import get_dynaflow_home
+from backend.powsybl_params import parse_bracket_list as _parse_bracket_list
+from backend.powsybl_params import parse_default as _parse_default
+from backend.powsybl_params import serialize_param as _serialize_provider_param
 
 _JOBS_NS = "http://www.rte-france.com/dynawo"
 
 # All fields that pypowsybl.loadflow.Parameters *may* expose across versions.
 # Only the ones actually present on the installed version will be used.
+# no_generator_reactive_limits and simul_shunt are the pre-1.x names of
+# use_reactive_limits and shunt_compensator_voltage_control_on.
 _KNOWN_FIELDS = [
     'voltage_init_mode',
     'transformer_voltage_control_on',
+    'use_reactive_limits',
     'no_generator_reactive_limits',
     'phase_shifter_regulation_on',
     'twt_split_shunt_admittance',
+    'shunt_compensator_voltage_control_on',
     'simul_shunt',
     'read_slack_bus',
     'write_slack_bus',
@@ -124,33 +131,6 @@ def enum_options() -> dict:
     return result
 
 
-def _parse_bracket_list(s: str) -> list[str]:
-    """Parse pypowsybl's "[A, B, C]" spec-string format into a list."""
-    s = (s or "").strip()
-    if not (s.startswith("[") and s.endswith("]")):
-        return []
-    inner = s[1:-1].strip()
-    return [v.strip() for v in inner.split(",")] if inner else []
-
-
-def _parse_default(raw: str, ptype: str):
-    """Parse a provider-parameter default into a JSON-friendly native type."""
-    raw = raw or ""
-    if ptype == "BOOLEAN":
-        return raw.strip().lower() == "true"
-    if ptype == "STRING_LIST":
-        return _parse_bracket_list(raw)
-    if ptype in ("DOUBLE", "INTEGER"):
-        try:
-            val = float(raw)
-        except (TypeError, ValueError):
-            return None
-        if val != val:  # NaN
-            return None
-        return int(val) if ptype == "INTEGER" else val
-    return raw
-
-
 def provider_parameter_specs(provider: str) -> list[dict]:
     """Return the provider-specific parameter specs (the ones forwarded via
     Parameters.provider_parameters) for a given pypowsybl loadflow provider.
@@ -175,27 +155,6 @@ def provider_parameter_specs(provider: str) -> list[dict]:
             "possible_values": _parse_bracket_list(row.get("possible_values", "")),
         })
     return specs
-
-
-def _serialize_provider_param(val: Any, ptype: str) -> str | None:
-    """Convert a native-typed UI value back into the string wire format
-    pypowsybl.loadflow.Parameters.provider_parameters expects.
-
-    Returns None when the value should be omitted entirely (unset/empty)
-    rather than sent as an empty string: some providers (e.g. DynaFlow's
-    `precision`, whose default is NaN) try to parse the string as a number
-    on the Java side and raise NumberFormatException: empty String if given "".
-    Omitting the key lets the provider fall back to its own internal default.
-    """
-    if ptype == "BOOLEAN":
-        return "true" if val else "false"
-    if ptype == "STRING_LIST":
-        if isinstance(val, (list, tuple)):
-            return ",".join(str(v) for v in val) if val else None
-        return None if val in (None, "") else str(val)
-    if val is None or val == "":
-        return None
-    return str(val)
 
 
 def build_params(req_parameters: dict[str, Any], provider: str | None = None) -> lf.Parameters:
@@ -290,17 +249,21 @@ def run(net, ac: bool, parameters: dict[str, Any], provider: str):
 class LoadFlowStageError(Exception):
     """Raised by run_loadflow_in_worker, tagged with which stage failed so the
     caller can reproduce the same per-stage error messages it used to produce
-    when load/run/export all happened in the main process."""
+    when load/run/export all happened in the main process.
 
-    def __init__(self, stage: str, message: str):
+    kept_files: the DynaFlow files a failed run still left in the session
+    (timeline, log, and with "keep input files" its .dyd/.par/config.json/.jobs)."""
+
+    def __init__(self, stage: str, message: str, kept_files: list[str] | None = None):
         super().__init__(message)
         self.stage = stage
+        self.kept_files = kept_files or []
 
     def __reduce__(self):
         # concurrent.futures round-trips exceptions through pickle to hand them
         # back from the worker process — the default reduce only replays
         # cls(*self.args), which would drop `stage` and break __init__'s arity.
-        return (self.__class__, (self.stage, self.args[0] if self.args else ""))
+        return (self.__class__, (self.stage, self.args[0] if self.args else "", self.kept_files))
 
 
 def _dynaflow_run_dirs(tmp_dir: str) -> set[str]:
@@ -548,6 +511,39 @@ def _cleanup_dynaflow_run_dirs(tmp_dir: str, new_dirs: set[str]) -> None:
         shutil.rmtree(version_dir, ignore_errors=True)
 
 
+def _collect_dynaflow_files(
+    tmp_dir: str, before: set[str], src_path: str, parameters: dict[str, Any],
+    outputs_dest_dir: str | None, debug_dest_dir: str | None,
+) -> list[str]:
+    """Copy what this DynaFlow run left in its working directories (those in
+    tmp_dir not in `before`) into the session, then delete them: its
+    timeline/constraints/log/lostEquipments into outputs_dest_dir, and its
+    .dyd/.par/config.json plus a reconstructed .jobs into debug_dest_dir.
+    Returns the copied filenames."""
+    copied: list[str] = []
+    new_dirs = _dynaflow_run_dirs(tmp_dir) - before
+    try:
+        if new_dirs:
+            basename = Path(src_path).stem
+            if outputs_dest_dir:
+                for run_dir in new_dirs:
+                    copied.extend(_copy_dynaflow_output_files(run_dir, outputs_dest_dir, basename))
+            if debug_dest_dir:
+                for run_dir in new_dirs:
+                    copied.extend(_copy_dynaflow_debug_files(run_dir, debug_dest_dir))
+                dyd_filenames = [f for f in copied if f.endswith(".dyd")]
+                job_xml = _reconstruct_dynaflow_job_xml(
+                    parameters, basename, os.path.basename(src_path), dyd_filenames,
+                )
+                job_name = f"{basename}.jobs"
+                with open(os.path.join(debug_dest_dir, job_name), "wb") as fh:
+                    fh.write(job_xml)
+                copied.append(job_name)
+    finally:
+        _cleanup_dynaflow_run_dirs(tmp_dir, new_dirs)
+    return copied
+
+
 def run_loadflow_in_worker(
     src_path: str, out_path: str, ac: bool, parameters: dict[str, Any], provider: str, iidm_version: str,
     debug_dest_dir: str | None = None, outputs_dest_dir: str | None = None,
@@ -585,36 +581,34 @@ def run_loadflow_in_worker(
     try:
         results = run(net, ac, parameters, provider)
     except Exception as exc:
+        # The launcher may well have run and diverged — its working directory
+        # then holds exactly the files needed to see why, so keep them as on
+        # the success path. Collecting them must not hide the run's own error.
+        kept: list[str] = []
         if tmp_dir:
-            _cleanup_dynaflow_run_dirs(tmp_dir, _dynaflow_run_dirs(tmp_dir) - before)
-        raise LoadFlowStageError("run", str(exc)) from None
+            try:
+                kept = _collect_dynaflow_files(tmp_dir, before, src_path, parameters,
+                                               outputs_dest_dir, debug_dest_dir)
+            except Exception:
+                _cleanup_dynaflow_run_dirs(tmp_dir, _dynaflow_run_dirs(tmp_dir) - before)
+        raise LoadFlowStageError("run", str(exc), kept) from None
 
     debug_files: list[str] = []
     if tmp_dir:
-        new_dirs = _dynaflow_run_dirs(tmp_dir) - before
-        if new_dirs:
-            basename = Path(src_path).stem
-            if outputs_dest_dir:
-                for run_dir in new_dirs:
-                    debug_files.extend(_copy_dynaflow_output_files(run_dir, outputs_dest_dir, basename))
-            if debug_dest_dir:
-                for run_dir in new_dirs:
-                    debug_files.extend(_copy_dynaflow_debug_files(run_dir, debug_dest_dir))
-                dyd_filenames = [f for f in debug_files if f.endswith(".dyd")]
-                job_xml = _reconstruct_dynaflow_job_xml(
-                    parameters, basename, os.path.basename(src_path), dyd_filenames,
-                )
-                job_name = f"{basename}.jobs"
-                with open(os.path.join(debug_dest_dir, job_name), "wb") as fh:
-                    fh.write(job_xml)
-                debug_files.append(job_name)
-        _cleanup_dynaflow_run_dirs(tmp_dir, new_dirs)
+        debug_files = _collect_dynaflow_files(tmp_dir, before, src_path, parameters,
+                                              outputs_dest_dir, debug_dest_dir)
 
-    try:
-        export_xiidm(net, out_path, iidm_version)
-    except Exception as exc:
-        raise LoadFlowStageError("export", str(exc)) from None
-    result = serialise_results(results, provider, os.path.basename(out_path))
+    # A run whose main component did not converge leaves the network in the
+    # state the solver stopped in — for DynaFlow, the injections of a diverged
+    # simulation (generators at thousands of MW/Mvar). Written out, it would be
+    # offered as a load-flow result and used as the input of the next run.
+    converged = bool(results) and _enum_name(results[0].status) == "CONVERGED"
+    if converged:
+        try:
+            export_xiidm(net, out_path, iidm_version)
+        except Exception as exc:
+            raise LoadFlowStageError("export", str(exc)) from None
+    result = serialise_results(results, provider, os.path.basename(out_path) if converged else None)
     result["debug_files"] = debug_files
     return result
 
@@ -733,7 +727,7 @@ def export_xiidm(net, out_path: str, iidm_version: str) -> None:
     net.dump(out_path, format="XIIDM", parameters={"iidm.export.xml.version": iidm_version})
 
 
-def serialise_results(results, provider: str, out_name: str) -> dict:
+def serialise_results(results, provider: str, out_name: str | None) -> dict:
     components = []
     for i, r in enumerate(results):
         slack_buses = [

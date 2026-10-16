@@ -9,13 +9,14 @@
 //
 
 import { useEffect, useRef, useState } from 'react'
-import { Alert, Button, Card, Space, Statistic, Table, Tag, Typography, Upload as AntUpload } from 'antd'
+import { Alert, Button, Card, Space, Statistic, Table, Tag, Tooltip, Typography, Upload as AntUpload } from 'antd'
 import {
-  DeleteOutlined, FileZipOutlined, FolderOpenOutlined, FolderOutlined, InboxOutlined, ReloadOutlined,
+  DeleteOutlined, FileZipOutlined, FolderOpenOutlined, FolderOutlined, InboxOutlined, ReloadOutlined, SettingOutlined,
 } from '@ant-design/icons'
 import client from '../api/client'
 import AutoloadFilesystemModal from './AutoloadFilesystemModal'
 import AutoloadZipModal from './AutoloadZipModal'
+import NetworkImportModal, { type NetworkSource } from './NetworkImportModal'
 
 const { Dragger } = AntUpload
 const { Title } = Typography
@@ -24,6 +25,12 @@ interface FileEntry {
   name: string
   size: number
   ftype: string | null
+  // A network in another format than XML IIDM ('network_source'), converted
+  // on upload to converted_to; that .xiidm carries converted_from.
+  source_format?: string
+  converted_to?: string
+  converted_from?: string
+  import_error?: string
 }
 
 interface NetworkSummary {
@@ -48,6 +55,7 @@ interface TreeRow {
   isFolder: boolean
   size: number
   ftype: string | null
+  file?: FileEntry
   children?: TreeRow[]
 }
 
@@ -75,7 +83,7 @@ function buildFileTree(files: FileEntry[]): TreeRow[] {
       folder.size += f.size
       siblings = folder.children!
     }
-    siblings.push({ key: f.name, title: parts[parts.length - 1], isFolder: false, size: f.size, ftype: f.ftype })
+    siblings.push({ key: f.name, title: parts[parts.length - 1], isFolder: false, size: f.size, ftype: f.ftype, file: f })
   }
 
   const sortRows = (rows: TreeRow[]) => {
@@ -117,6 +125,7 @@ export default function Upload() {
   const replaceInputRef = useRef<HTMLInputElement>(null)
   const [fsModalOpen, setFsModalOpen] = useState(false)
   const [zipModalOpen, setZipModalOpen] = useState(false)
+  const [importTarget, setImportTarget] = useState<NetworkSource | null>(null)
 
   const fetchFiles = async () => {
     const res = await client.get<FileEntry[]>('/files/')
@@ -141,7 +150,11 @@ export default function Upload() {
     const form = new FormData()
     for (const { file, path } of items) form.append('files', file, path)
     try {
-      await client.post('/files/upload', form)
+      const res = await client.post<FileEntry[]>('/files/upload', form)
+      const failed = res.data.filter(f => f.import_error)
+      if (failed.length) {
+        setError(failed.map(f => `${f.name} could not be converted to IIDM: ${f.import_error}`).join('\n'))
+      }
       await fetchFiles()
     } catch (err: any) {
       setError(err.response?.data?.detail ?? 'Upload failed')
@@ -220,21 +233,44 @@ export default function Upload() {
     {
       title: 'Name', dataIndex: 'title', key: 'title',
       render: (title: string, record: TreeRow) => (
-        <Typography.Text strong={!record.isFolder}>
-          {record.isFolder ? <FolderOutlined style={{ marginRight: 6 }} /> : null}
-          {title}
-        </Typography.Text>
+        <>
+          <Typography.Text strong={!record.isFolder}>
+            {record.isFolder ? <FolderOutlined style={{ marginRight: 6 }} /> : null}
+            {title}
+          </Typography.Text>
+          {record.file?.converted_to && (
+            <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
+              → {record.file.converted_to}
+            </Typography.Text>
+          )}
+          {record.file?.converted_from && (
+            <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
+              converted from {record.file.converted_from}
+            </Typography.Text>
+          )}
+        </>
       ),
     },
     {
       title: 'Type', dataIndex: 'ftype', key: 'ftype',
       render: (ftype: string | null, record: TreeRow) => {
         if (record.isFolder) return null
+        if (ftype === 'network_source') {
+          const { source_format, import_error } = record.file ?? {}
+          return (
+            <Space size={4}>
+              <Tag color="geekblue">{source_format}</Tag>
+              {import_error && (
+                <Tooltip title={import_error}><Tag color="error">import failed</Tag></Tooltip>
+              )}
+            </Space>
+          )
+        }
         return ftype
           ? <Tag color={FTYPE_COLOR[ftype] ?? 'default'}>{ftype.toUpperCase()}</Tag>
           : <Tag>unknown</Tag>
       },
-      width: 90,
+      width: 170,
     },
     {
       title: 'Size', dataIndex: 'size', key: 'size',
@@ -242,13 +278,18 @@ export default function Upload() {
       width: 90,
     },
     {
-      title: '', key: 'actions', width: 160,
+      title: '', key: 'actions', width: 260,
       render: (_: unknown, record: TreeRow) => record.isFolder ? (
         <Button size="small" danger icon={<DeleteOutlined />} onClick={() => handleUnloadFolder(record)}>
           Unload folder
         </Button>
       ) : (
         <span style={{ display: 'flex', gap: 8 }}>
+          {record.ftype === 'network_source' && record.file && (
+            <Button size="small" icon={<SettingOutlined />} onClick={() => setImportTarget(record.file!)}>
+              Import options
+            </Button>
+          )}
           <Button size="small" icon={<ReloadOutlined />} onClick={() => {
             setReplaceTarget(record.key)
             replaceInputRef.current?.click()
@@ -270,7 +311,7 @@ export default function Upload() {
           type="error"
           description={error}
           action={<Button size="small" onClick={() => setError(null)}>Dismiss</Button>}
-          style={{ marginBottom: 16 }}
+          style={{ marginBottom: 16, whiteSpace: 'pre-line' }}
         />
       )}
 
@@ -291,6 +332,10 @@ export default function Upload() {
           <p className="ant-upload-drag-icon"><InboxOutlined /></p>
           <p className="ant-upload-text">Click or drag Dynawo files or a folder here to upload</p>
           <p className="ant-upload-hint">.jobs, .dyd, .par, .iidm, .crv — multiple files or a whole folder supported</p>
+          <p className="ant-upload-hint">
+            Networks in other formats — CGMES (.zip), PSS/E (.raw), UCTE (.uct), MATPOWER (.mat),
+            IEEE-CDF (.txt), PowerFactory (.dgs), JSON/binary IIDM — are converted to .xiidm on upload
+          </p>
         </Dragger>
       </div>
 
@@ -355,6 +400,14 @@ export default function Upload() {
         onClose={() => setFsModalOpen(false)}
         onDone={() => { setFsModalOpen(false); fetchFiles() }}
       />
+      {importTarget && (
+        <NetworkImportModal
+          key={importTarget.name}
+          source={importTarget}
+          onClose={() => setImportTarget(null)}
+          onDone={() => { setImportTarget(null); fetchFiles(); fetchNetwork() }}
+        />
+      )}
       <AutoloadZipModal
         open={zipModalOpen}
         onClose={() => setZipModalOpen(false)}

@@ -17,8 +17,10 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
+from starlette.concurrency import run_in_threadpool
 
 from api.dependencies import get_session
+from api.network_import import convert_network_source, unlink_conversion
 from api.session_store import UserSession
 from backend.output_parser import parse_constraints, parse_lost_equipments, parse_timeline
 
@@ -37,6 +39,16 @@ def _validate_filename(filename: str | None) -> str:
     if normalized.startswith("/") or any(p in ("", ".", "..") for p in parts):
         raise HTTPException(status_code=400, detail=f"Invalid filename: {filename!r}")
     return normalized
+
+
+def _file_entry(name: str, meta: dict) -> dict:
+    """A file as the API lists it: name, size, ftype, and for a network
+    converted to XIIDM the link between source and .xiidm."""
+    entry = {"name": name, "size": meta["size"], "ftype": meta["ftype"]}
+    for key in ("source_format", "converted_to", "converted_from", "import_error"):
+        if meta.get(key):
+            entry[key] = meta[key]
+    return entry
 
 
 def _read_session_file(session: UserSession, filename: str) -> bytes:
@@ -97,7 +109,7 @@ async def upload_files(
     files: list[UploadFile],
     session: UserSession = Depends(get_session),
 ):
-    results = []
+    added = []
     for f in files:
         filename = _validate_filename(f.filename)
         data = await f.read()
@@ -108,17 +120,19 @@ async def upload_files(
             "size": info.size,
             "ftype": info.ftype,
         }
-        results.append({"name": filename, "size": info.size, "ftype": info.ftype})
+        added.append(filename)
+    # Networks in other formats are converted once the whole batch is stored,
+    # so a .xiidm uploaded alongside its source keeps its name.
+    for filename in added:
+        if session.uploaded_files_info[filename]["ftype"] == "network_source":
+            await run_in_threadpool(convert_network_source, session, filename)
     _auto_fix_paths(session)
-    return results
+    return [_file_entry(name, session.uploaded_files_info[name]) for name in added]
 
 
 @router.get("/")
 def list_files(session: UserSession = Depends(get_session)):
-    return [
-        {"name": name, "size": meta["size"], "ftype": meta["ftype"]}
-        for name, meta in session.uploaded_files_info.items()
-    ]
+    return [_file_entry(name, meta) for name, meta in session.uploaded_files_info.items()]
 
 
 @router.get("/state")
@@ -151,6 +165,7 @@ def files_state(session: UserSession = Depends(get_session)):
 def unload_file(filename: str, session: UserSession = Depends(get_session)):
     if not session.session_manager.has_file(filename):
         raise HTTPException(status_code=404, detail=f"{filename} not found")
+    unlink_conversion(session, filename)
     session.session_manager.remove_file(filename)
     session.uploaded_files_info.pop(filename, None)
     if session.network_name == filename:
@@ -190,12 +205,22 @@ async def replace_file(
     if not session.session_manager.has_file(filename):
         raise HTTPException(status_code=404, detail=f"{filename} not found")
     data = await file.read()
+    # A replaced source is converted again into the same .xiidm; a replaced
+    # .xiidm is no longer the conversion of its source.
+    old_meta = session.uploaded_files_info.get(filename, {})
+    converted_to = old_meta.get("converted_to")
+    unlink_conversion(session, filename)
     info = session.session_manager.replace_file(filename, data)
     session.uploaded_files_info[filename] = {"size": info.size, "ftype": info.ftype}
+    if info.ftype == "network_source":
+        if converted_to:
+            session.uploaded_files_info[filename]["converted_to"] = converted_to
+            session.uploaded_files_info[converted_to]["converted_from"] = filename
+        await run_in_threadpool(convert_network_source, session, filename)
     if session.network_name == filename:
         session.network = None
         session.network_name = None
     for log in (session.par_change_log, session.solver_change_log):
         log[:] = [e for e in log if e.par_file != filename]
     _auto_fix_paths(session)
-    return {"name": filename, "size": info.size, "ftype": info.ftype}
+    return _file_entry(filename, session.uploaded_files_info[filename])
