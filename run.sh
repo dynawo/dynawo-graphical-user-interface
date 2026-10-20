@@ -21,6 +21,12 @@
 #
 # Usage:
 #   ./run.sh
+#   ./run.sh --test [pytest options]   run the unit tests (backend, then frontend)
+#                                      instead of the app. Options go to pytest,
+#                                      e.g. ./run.sh --test -k par -v
+#
+# --test installs the test dependencies (requirements-dev.txt) into .venv on
+# first use, and again whenever that file changes.
 
 set -euo pipefail
 
@@ -41,6 +47,47 @@ if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
     # Print the leading doc-comment block (skip shebang, stop at code).
     awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "${BASH_SOURCE[0]}"
     exit 0
+fi
+
+# --- tests -------------------------------------------------------------------
+# Handled before the guards below: the tests need .venv, not the frontend's
+# node_modules, nor the servers.
+
+if [ "${1:-}" = "--test" ]; then
+    shift
+    if [ ! -x "$VENV_DIR/bin/python" ]; then
+        fail "Backend not installed (no .venv). Run ./install.sh first."
+    fi
+    # Reinstalled whenever requirements-dev.txt changes: its checksum at the
+    # last successful install is kept in .venv, so adding a test dependency
+    # needs no manual step. (cksum, being POSIX, works on Linux and macOS.)
+    DEV_STAMP="$VENV_DIR/.requirements-dev.cksum"
+    DEV_SUM="$(cksum < "$ROOT/requirements-dev.txt")"
+    if [ "$(cat "$DEV_STAMP" 2>/dev/null)" != "$DEV_SUM" ]; then
+        info "Installing test dependencies (requirements-dev.txt)"
+        "$VENV_DIR/bin/python" -m pip install -r "$ROOT/requirements-dev.txt"
+        printf '%s\n' "$DEV_SUM" > "$DEV_STAMP"
+    fi
+    # Vitest is a devDependency: missing from a node_modules installed before
+    # it was added, so installed here rather than failing with "not found".
+    if [ ! -x "$FRONTEND_DIR/node_modules/.bin/vitest" ]; then
+        info "Installing frontend dependencies (npm install)"
+        # npm install, NOT npm ci — see install.sh.
+        ( cd "$FRONTEND_DIR" && npm install )
+    fi
+
+    # Both suites always run, so one failing does not hide the other's result.
+    STATUS=0
+    info "Running backend unit tests"
+    "$VENV_DIR/bin/python" -m pytest "$@" || STATUS=1
+    info "Running frontend unit tests"
+    ( cd "$FRONTEND_DIR" && npm test ) || STATUS=1
+    if [ "$STATUS" -eq 0 ]; then
+        info "All tests passed"
+    else
+        warn "Some tests failed — see above"
+    fi
+    exit "$STATUS"
 fi
 
 # --- guards ------------------------------------------------------------------

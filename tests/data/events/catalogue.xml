@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Reduced events catalogue for the tests, same format as resources/events.xml.
+     Kept separate from it so editing the shipped catalogue does not break the
+     tests. Chosen to cover the cases read_events must tell apart:
+     - load disconnection / connection: same lib and wiring, differ by event_open;
+     - load / generator disconnection: same lib, wiring and value, differ by
+       the kind of equipment. -->
+<events>
+  <eventFamily scope="network" label="Network object">
+    <event id="network_line_disconnection" appliesTo="LINE"
+           label="Line disconnection" lib="EventQuadripoleDisconnection">
+      <connectPattern valueVar1="state" valueVar2="state"/>
+      <destination to="NETWORK"/>
+    </event>
+    <event id="network_load_disconnection" appliesTo="LOAD"
+           label="Load disconnection" lib="EventConnectedStatus">
+      <connectPattern valueVar1="state" valueVar2="state"/>
+      <destination to="NETWORK"/>
+      <fixedParameter name="event_open" value="true"/>
+    </event>
+    <event id="network_load_connection" appliesTo="LOAD"
+           label="Load connection" lib="EventConnectedStatus">
+      <connectPattern valueVar1="state" valueVar2="state"/>
+      <destination to="NETWORK"/>
+      <fixedParameter name="event_open" value="false"/>
+    </event>
+    <event id="network_generator_disconnection" appliesTo="GENERATOR"
+           label="Generator disconnection" lib="EventConnectedStatus">
+      <connectPattern valueVar1="state" valueVar2="state"/>
+      <destination to="NETWORK"/>
+      <fixedParameter name="event_open" value="true"/>
+    </event>
+  </eventFamily>
+  <eventFamily scope="dynamic" label="Dynamic model">
+    <event id="dynamic_disconnection"
+           label="Disconnection" lib="EventSetPointBoolean">
+      <connectPattern valueVar1="state" valueVar2="switchOffSignal2"/>
+      <destination to="MODEL"/>
+      <fixedParameter name="event_stateEvent1" value="true"/>
+    </event>
+  </eventFamily>
+</events>

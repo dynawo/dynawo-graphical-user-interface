@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Two sets sharing a macro (GEN1 overrides one value of it), one plain set. -->
+<parametersSet xmlns="http://www.rte-france.com/dynawo">
+  <macroParameterSet id="MACRO_GEN">
+    <par type="DOUBLE" name="generator_H" value="5.4"/>
+    <par type="DOUBLE" name="generator_SNom" value="1150"/>
+    <reference type="DOUBLE" name="generator_P0Pu" origData="IIDM" origName="p_pu"/>
+  </macroParameterSet>
+  <set id="GEN1">
+    <macroParSet id="MACRO_GEN"/>
+    <par type="DOUBLE" name="generator_SNom" value="2000"/>
+    <par type="INT" name="generator_ExcitationPu" value="1"/>
+  </set>
+  <set id="GEN2">
+    <macroParSet id="MACRO_GEN"/>
+  </set>
+  <set id="LOAD1">
+    <par type="DOUBLE" name="load_alpha" value="2"/>
+    <par type="BOOL" name="load_isControllable" value="false"/>
+    <reference type="DOUBLE" name="load_P0Pu" origData="IIDM" origName="p_pu"/>
+  </set>
+</parametersSet>

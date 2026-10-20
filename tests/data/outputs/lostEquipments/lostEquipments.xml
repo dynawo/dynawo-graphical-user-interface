@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lostEquipments xmlns="http://www.rte-france.com/dynawo">
+  <lostEquipment id="L1-2" type="LINE"/>
+  <lostEquipment id="LOAD1" type="LOAD"/>
+</lostEquipments>

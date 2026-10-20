@@ -3,6 +3,7 @@
 **/*.py[cod]
 *.egg-info/
 .venv/
+.pytest_cache/
 
 # Node
 frontend/node_modules/

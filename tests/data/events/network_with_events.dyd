@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<dyn:dynamicModelsArchitecture xmlns:dyn="http://www.rte-france.com/dynawo">
+  <!-- A .dyd describing the network that also declares two events: GEN1, its
+       connection and this comment must survive saving events from the GUI. -->
+  <dyn:blackBoxModel id="GEN1" lib="GeneratorSynchronousFourWindings" parFile="case.par" parId="GEN1" staticId="GEN1"/>
+  <dyn:blackBoxModel id="OLD_EVENT" lib="EventQuadripoleDisconnection" parFile="network_with_events.par" parId="OLD_EVENT"/>
+  <!-- Written the powsybl-dynawo way: wired by a macroConnect, target in staticId. -->
+  <dyn:blackBoxModel id="MACRO_EVENT" lib="EventQuadripoleDisconnection" parFile="network_with_events.par" parId="MACRO_EVENT" staticId="L1-2-1"/>
+  <dyn:macroConnector id="MC_QUADRIPOLE_EVENT">
+    <dyn:connect var1="event_state1_value" var2="@STATIC_ID@_state_value"/>
+  </dyn:macroConnector>
+  <dyn:connect id1="GEN1" var1="generator_terminal" id2="NETWORK" var2="BUS1_ACPIN"/>
+  <dyn:connect id1="OLD_EVENT" var1="event_state1_value" id2="NETWORK" var2="L1-2_state_value"/>
+  <dyn:macroConnect connector="MC_QUADRIPOLE_EVENT" id1="MACRO_EVENT" id2="NETWORK"/>
+</dyn:dynamicModelsArchitecture>

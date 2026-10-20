@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- build_events_par() output for test_events_writer.py's EVENTS, new file. -->
+<parametersSet xmlns="http://www.rte-france.com/dynawo">
+  <set id="EV_LINE">
+    <par type="DOUBLE" name="event_tEvent" value="1"/>
+    <par type="BOOL" name="event_disconnectOrigin" value="true"/>
+    <par type="BOOL" name="event_disconnectExtremity" value="true"/>
+  </set>
+  <set id="EV_GEN">
+    <par type="DOUBLE" name="event_tEvent" value="2"/>
+    <par type="BOOL" name="event_stateEvent1" value="true"/>
+  </set>
+</parametersSet>

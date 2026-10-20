@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- build_events_dyd() output for test_events_writer.py's EVENTS, new file. -->
+<dyn:dynamicModelsArchitecture xmlns:dyn="http://www.rte-france.com/dynawo">
+  <dyn:blackBoxModel id="EV_LINE" lib="EventQuadripoleDisconnection" parFile="events.par" parId="EV_LINE"/>
+  <dyn:blackBoxModel id="EV_GEN" lib="EventSetPointBoolean" parFile="events.par" parId="EV_GEN"/>
+  <dyn:connect id1="EV_LINE" var1="event_state1_value" id2="NETWORK" var2="L1-2_state_value"/>
+  <dyn:connect id1="EV_GEN" var1="event_state1" id2="GEN1" var2="generator_switchOffSignal2"/>
+</dyn:dynamicModelsArchitecture>
