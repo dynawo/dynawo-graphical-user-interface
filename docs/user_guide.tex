@@ -151,6 +151,8 @@ new user only needs two commands:
 ./run.sh       # start both servers, then open http://localhost:5173
 \end{lstlisting}
 
+To run the unit tests instead of the application, see Section~\ref{sec:tests}.
+
 \code{install.sh} checks the prerequisites above (Python, Node, npm), verifies
 that the PyPI and npm registries are reachable --- stopping with a proxy hint if
 they are not --- creates the \code{.venv} virtual environment, installs the
@@ -163,14 +165,14 @@ both servers down cleanly on \code{Ctrl+C}. Environment variables
 (Section~\ref{sec:deploy}) are passed through, e.g.\
 \code{SESSION\_TTL=7200 ./run.sh}.
 
-To reset a broken or stale install, re-run with \code{--clean}:
+To reset a broken or stale install, re-run with \code{-{}-clean}:
 
 \begin{lstlisting}[language=bash]
 ./install.sh --clean   # remove .venv and frontend/node_modules, then reinstall
 \end{lstlisting}
 
 \begin{notebox}
-\code{--clean} keeps the tracked \code{frontend/package-lock.json} (so
+\code{-{}-clean} keeps the tracked \code{frontend/package-lock.json} (so
 dependencies reinstall at their committed versions) and never touches
 downloaded Dynawo versions under
 \code{\textasciitilde/.config/dynawo\_ihm/}.
@@ -1220,6 +1222,42 @@ The chart grows taller as plots are added.
 
 \code{GET /api/admin/sessions} returns active session count and per-session
 summary (idle time, files, network loaded, simulation running).
+
+% ═════════════════════════════════════════════════════════════════════════════
+\section{Running the tests}
+\label{sec:tests}
+
+The application comes with unit tests for the backend (pytest, in \code{tests/})
+and for the frontend (Vitest, the \code{*.test.ts} files in \code{frontend/src/}).
+They need no Dynawo installation: they work on small files of \code{tests/data/}.
+
+From the repository root, after \code{./install.sh}
+(Section~\ref{sec:quickstart}):
+
+\begin{lstlisting}[language=bash]
+./run.sh --test
+\end{lstlisting}
+
+This runs the backend tests, then the frontend tests, and ends with
+\emph{All tests passed} or \emph{Some tests failed}. The test tools are
+installed automatically the first time.
+
+Options given after \code{-{}-test} are passed to pytest, to run only part of the
+backend tests:
+
+\begin{lstlisting}[language=bash]
+./run.sh --test -v               # list each test by name
+./run.sh --test -k par           # names containing "par"
+./run.sh --test tests/unit/api   # only the API tests
+\end{lstlisting}
+
+The frontend tests alone: \code{cd frontend \&\& npm test}, or
+\code{npx vitest} to re-run them on every save.
+
+\begin{notebox}
+The same tests run on GitHub on every push. A pull request towards
+\code{master} can only be merged once they pass.
+\end{notebox}
 
 % ═════════════════════════════════════════════════════════════════════════════
 \section{Keyboard shortcuts and tips}
