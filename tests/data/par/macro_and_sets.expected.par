@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- macro_and_sets.par after test_par_writer.py's test_output_matches_expected_file:
+     GEN1 generator_SNom (its own par) -> 2500, GEN2 generator_H (from the macro,
+     so MACRO_GEN changes) -> 6, LOAD1 gets a new par load_beta = 1.5. -->
+<parametersSet xmlns="http://www.rte-france.com/dynawo">
+  <macroParameterSet id="MACRO_GEN">
+    <par type="DOUBLE" name="generator_H" value="6"/>
+    <par type="DOUBLE" name="generator_SNom" value="1150"/>
+    <reference type="DOUBLE" name="generator_P0Pu" origData="IIDM" origName="p_pu"/>
+  </macroParameterSet>
+  <set id="GEN1">
+    <macroParSet id="MACRO_GEN"/>
+    <par type="DOUBLE" name="generator_SNom" value="2500"/>
+    <par type="INT" name="generator_ExcitationPu" value="1"/>
+  </set>
+  <set id="GEN2">
+    <macroParSet id="MACRO_GEN"/>
+  </set>
+  <set id="LOAD1">
+    <par type="DOUBLE" name="load_alpha" value="2"/>
+    <par type="BOOL" name="load_isControllable" value="false"/>
+    <reference type="DOUBLE" name="load_P0Pu" origData="IIDM" origName="p_pu"/>
+    <par name="load_beta" type="DOUBLE" value="1.5"/>
+  </set>
+</parametersSet>

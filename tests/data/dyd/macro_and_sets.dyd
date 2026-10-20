@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Models of par/macro_and_sets.par. GEN1 and GEN1_BIS share one <set>;
+     GEN2 only shares GEN1's macro. OMEGA_REF has no staticId. -->
+<dyn:dynamicModelsArchitecture xmlns:dyn="http://www.rte-france.com/dynawo">
+  <dyn:blackBoxModel id="GEN1" lib="GeneratorSynchronousFourWindings" parFile="macro_and_sets.par" parId="GEN1" staticId="GEN1"/>
+  <dyn:blackBoxModel id="GEN1_BIS" lib="GeneratorSynchronousFourWindings" parFile="macro_and_sets.par" parId="GEN1" staticId="GEN1_BIS"/>
+  <dyn:blackBoxModel id="GEN2" lib="GeneratorSynchronousFourWindings" parFile="macro_and_sets.par" parId="GEN2" staticId="GEN2"/>
+  <dyn:blackBoxModel id="LOAD1" lib="LoadAlphaBeta" parFile="macro_and_sets.par" parId="LOAD1" staticId="LOAD1"/>
+  <dyn:blackBoxModel id="OMEGA_REF" lib="DYNModelOmegaRef" parFile="macro_and_sets.par" parId="OMEGA_REF"/>
+</dyn:dynamicModelsArchitecture>

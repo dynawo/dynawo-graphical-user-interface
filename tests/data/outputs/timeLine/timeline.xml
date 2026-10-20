@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<timeline xmlns="http://www.rte-france.com/dynawo">
+  <event time="1.000000" modelName="EV_LINE" message="LINE : opening both sides"/>
+  <event time="1.050000" modelName="GEN1" message="PMIN : activation"/>
+</timeline>

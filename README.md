@@ -11,8 +11,9 @@ Built with **FastAPI** (backend) + **React/Vite** (frontend).
 Two scripts wrap the full dev setup:
 
 ```bash
-./install.sh   # create the venv, install backend + frontend dependencies
-./run.sh       # start both servers; open http://localhost:5173
+./install.sh       # create the venv, install backend + frontend dependencies
+./run.sh           # start both servers; open http://localhost:5173
+./run.sh --test    # run the unit tests (see Tests below)
 ```
 
 `install.sh` checks prerequisites (Python ≥ 3.10, Node ≥ 18), verifies the
@@ -92,9 +93,11 @@ dynawo_IHM/
 ├── backend/              # Shared business logic (Python library)
 ├── frontend/             # React + Vite frontend
 │   └── src/
-│       ├── pages/        # One file per page
+│       ├── pages/        # One file per page (*.test.ts: frontend unit tests)
 │       └── api/          # Axios client
-└── requirements.txt      # Python dependencies
+├── tests/                # Backend unit tests (pytest) and their data files
+├── requirements.txt      # Python dependencies
+└── requirements-dev.txt  # Test-only Python dependencies
 ```
 
 ---
@@ -167,6 +170,33 @@ npm run dev
 ```
 
 Opens at `http://localhost:5173`. All `/api/*` requests are proxied to FastAPI on port 8000 — both servers must be running.
+
+---
+
+## Tests
+
+From the repo root, after `./install.sh`:
+
+```bash
+./run.sh --test
+```
+
+Runs the backend tests (pytest, in `tests/`) and then the frontend tests
+(Vitest, `*.test.ts` files in `frontend/src/`). It ends with "All tests passed"
+or "Some tests failed", and a non-zero exit status if anything failed. Test
+dependencies are installed automatically the first time. No Dynawo install is
+needed: the tests use small files from `tests/data/`.
+
+Options after `--test` go to pytest, to run part of the backend tests:
+
+```bash
+./run.sh --test -v                 # list each test by name
+./run.sh --test -k par             # only tests whose name contains "par"
+./run.sh --test tests/unit/api     # only the API tests
+```
+
+The frontend tests on their own: `cd frontend && npm test`, or `npx vitest`
+to re-run them on every save.
 
 ---
 

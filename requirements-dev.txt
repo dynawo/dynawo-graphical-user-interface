@@ -1,0 +1,7 @@
+# Test-only dependencies, kept out of requirements.txt so the runtime image
+# stays lean. Includes the runtime ones, so this single file is enough to set
+# up an environment that runs the tests.
+-r requirements.txt
+pytest>=8
+# Needed by FastAPI's TestClient, for the API tests.
+httpx

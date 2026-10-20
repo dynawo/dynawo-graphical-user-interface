@@ -36,9 +36,14 @@ def load_curves_csv(output_dir: str) -> pd.DataFrame | None:
     if not os.path.isfile(csv_path):
         return None
     try:
-        return pd.read_csv(csv_path, sep=";")
+        df = pd.read_csv(csv_path, sep=";")
     except Exception:
         return None
+    # Dynawo ends every line with the separator, which pandas reads as one more
+    # column, nameless ("Unnamed: N") and empty. It is not a curve, and would
+    # otherwise be offered as one in the plot's column picker.
+    empty = [c for c in df.columns if str(c).startswith("Unnamed:") and df[c].isna().all()]
+    return df.drop(columns=empty)
 
 
 def curves_time_and_signals(df: pd.DataFrame) -> tuple[pd.Series, list[str]]:
