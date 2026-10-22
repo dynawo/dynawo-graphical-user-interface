@@ -38,6 +38,9 @@ _VOLTAGE_LEVEL_ATTRIBUTES = ("nominal_v", "substation_id", "country")
 # Text attributes with at most this many distinct values list them.
 _MAX_LISTED_VALUES = 30
 
+# Ids of the elements without a model returned per element type.
+MAX_LISTED_UNMATCHED = 200
+
 # operator -> (applicable kinds, pandas filter, equivalent code for the script
 # export). Both forms must stay identical.
 OPERATORS = {
@@ -148,6 +151,15 @@ def coerce_value(kind: str, operator: str, raw):
     return _coerce_one(kind, raw)
 
 
+def attribute_values(df: pd.DataFrame, attribute: str, search: str, limit: int) -> tuple[list[str], int]:
+    """Distinct values of an attribute containing `search` (case-insensitive):
+    (first `limit` sorted, number matching)."""
+    values = pd.Series(df[attribute].dropna().unique()).astype(str)
+    if search:
+        values = values[values.str.contains(search, case=False, regex=False)]
+    return sorted(values)[:limit], len(values)
+
+
 def check_condition(df: pd.DataFrame, condition: dict) -> tuple[object, str | None]:
     """(coerced value, None) if the condition applies to the table, else (None, reason)."""
     attribute = condition.get("attribute")
@@ -200,17 +212,20 @@ def _known_categories() -> set[str]:
 
 # ── Resolution ────────────────────────────────────────────────────────────────
 
-def resolve(network, rules: list[dict], catalogue: list[dict], check_parameters=None) -> dict:
+def resolve(network, rules: list[dict], catalogue: list[dict], check_parameters=None, tables: dict | None = None) -> dict:
     """Apply the rules to the network; a rule with errors is skipped.
 
-    `check_parameters(rule) -> list[str]` optionally reports parameter-set errors.
+    `check_parameters(rule) -> list[str]` optionally reports parameter-set errors;
+`tables` optionally caches the element tables of this network by type id.
     Returns {rules: [{index, matched, applied, errors, warnings}],
     assignments: [{element_type, static_id, model, category, rule}],
-    element_types: [{id, label, total, unmatched}]}.
+    element_types: [{id, label, total, unmatched_count, unmatched}]}, `unmatched`
+holding at most MAX_LISTED_UNMATCHED ids.
     """
     model_category = {m["name"]: c["name"] for c in catalogue if c["kind"] == EQUIPMENT for m in c["models"]}
     known_categories = _known_categories()
-    tables: dict[str, pd.DataFrame] = {}
+    if tables is None:
+        tables = {}
 
     def table(type_entry: dict) -> pd.DataFrame:
         if type_entry["id"] not in tables:
@@ -266,11 +281,13 @@ def resolve(network, rules: list[dict], catalogue: list[dict], check_parameters=
     element_types = []
     for type_entry in load_element_types():
         ids = table(type_entry)["id"]
+        unmatched = [i for i in ids if (type_entry["id"], i) not in owner]
         element_types.append({
-            "id":        type_entry["id"],
-            "label":     type_entry["label"],
-            "total":     len(ids),
-            "unmatched": [i for i in ids if (type_entry["id"], i) not in owner],
+            "id":              type_entry["id"],
+            "label":           type_entry["label"],
+            "total":           len(ids),
+            "unmatched_count": len(unmatched),
+            "unmatched":       unmatched[:MAX_LISTED_UNMATCHED],
         })
 
     return {"rules": reports, "assignments": assignments, "element_types": element_types}

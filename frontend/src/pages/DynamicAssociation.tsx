@@ -43,7 +43,8 @@ interface ParFile { name: string; sets: string[] }
 interface ParamSources { files: ParFile[]; generic: { available: boolean; sets: string[] } }
 interface RuleReport { index: number; matched: number; applied: number; errors: string[]; warnings: string[] }
 interface Assignment { element_type: string; static_id: string; model: string; category: string; rule: number }
-interface TypeSummary { id: string; label: string; total: number; unmatched: string[] }
+// unmatched: the first ids only; unmatched_count: all of them.
+interface TypeSummary { id: string; label: string; total: number; unmatched_count: number; unmatched: string[] }
 interface Resolution { rules: RuleReport[]; assignments: Assignment[]; element_types: TypeSummary[] }
 interface Context {
   network_file: string | null
@@ -92,7 +93,6 @@ const SOLVERS = [
   { value: 'dynawo_SolverIDA', label: 'IDA (dynawo_SolverIDA)' },
   { value: 'dynawo_SolverSIM', label: 'SIM (dynawo_SolverSIM)' },
 ]
-const MAX_LISTED_IDS = 200
 
 // Model dropdown width (px), fitting the longest model names. A number keeps
 // the dropdown virtual, unlike `false`.
@@ -115,7 +115,8 @@ function newRule(elementType: string, parFiles: ParFile[]): UiRule {
 
 // ── One condition ─────────────────────────────────────────────────────────────
 
-function ConditionRow({ condition, attributes, onChange, onRemove }: {
+function ConditionRow({ elementType, condition, attributes, onChange, onRemove }: {
+  elementType: string
   condition: Condition
   attributes: Attribute[]
   onChange: (c: Condition) => void
@@ -123,6 +124,23 @@ function ConditionRow({ condition, attributes, onChange, onRemove }: {
 }) {
   const attr = attributes.find(a => a.name === condition.attribute)
   const listValues = attr?.kind === 'boolean' ? ['true', 'false'] : attr?.values ?? null
+  // Text attributes with too many values to list (e.g. ids) are searched on the server.
+  const searched = attr?.kind === 'text' && !attr.values
+  const [found, setFound] = useState<string[]>([])
+  const searchTimer = useRef<number | undefined>(undefined)
+  const search = (text: string) => {
+    window.clearTimeout(searchTimer.current)
+    searchTimer.current = window.setTimeout(() => {
+      client.get<{ values: string[] }>(`/dynamic-association/element-types/${elementType}/values`,
+        { params: { attribute: condition.attribute, search: text, limit: 50 } })
+        .then(res => setFound(res.data.values))
+        .catch(() => setFound([]))
+    }, 250)
+  }
+  const searchProps = searched
+    ? { onSearch: search, onFocus: () => search(''), filterOption: false, notFoundContent: 'type part of a value' }
+    : {}
+  const proposed = searched ? found : listValues ?? []
 
   const setAttribute = (name: string) => {
     const next = attributes.find(a => a.name === name)
@@ -138,16 +156,18 @@ function ConditionRow({ condition, attributes, onChange, onRemove }: {
   let valueWidget
   if (condition.operator === 'in') {
     valueWidget = (
-      <Select mode="tags" style={{ minWidth: 220 }} placeholder="values"
+      // Proposed values are picked; free entry ("tags") only for numbers.
+      <Select mode={searched || listValues ? 'multiple' : 'tags'} style={{ minWidth: 220 }}
+        placeholder={searched ? 'type to search values' : 'values'}
         value={Array.isArray(condition.value) ? condition.value : []}
-        options={(listValues ?? []).map(v => ({ value: v, label: v }))}
+        options={proposed.map(v => ({ value: v, label: v }))} {...searchProps}
         onChange={v => onChange({ ...condition, value: v })} />
     )
-  } else if (listValues && condition.operator !== 'matches') {
+  } else if ((listValues || searched) && condition.operator !== 'matches') {
     valueWidget = (
-      <Select showSearch style={{ minWidth: 220 }} placeholder="value"
+      <Select showSearch style={{ minWidth: 220 }} placeholder={searched ? 'type to search a value' : 'value'}
         value={typeof condition.value === 'string' && condition.value ? condition.value : undefined}
-        options={listValues.map(v => ({ value: v, label: v }))}
+        options={proposed.map(v => ({ value: v, label: v }))} {...searchProps}
         onChange={v => onChange({ ...condition, value: v })} />
     )
   } else {
@@ -254,7 +274,7 @@ function RuleCard({ rule, index, count, report, elementTypes, attributes, models
           </Text>
           <Space orientation="vertical" style={{ width: '100%', marginTop: 6 }} size={6}>
             {rule.conditions.map((c, i) => (
-              <ConditionRow key={i} condition={c} attributes={attributes}
+              <ConditionRow key={i} elementType={rule.element_type} condition={c} attributes={attributes}
                 onChange={nc => setCondition(i, nc)}
                 onRemove={() => onChange({ ...rule, conditions: rule.conditions.filter((_, j) => j !== i) })} />
             ))}
@@ -486,15 +506,15 @@ export default function DynamicAssociation() {
               columns={[
                 { title: 'Elements', dataIndex: 'label' },
                 { title: 'In the network', dataIndex: 'total', align: 'right' },
-                { title: 'With a dynamic model', align: 'right', render: (_, t) => t.total - t.unmatched.length },
-                { title: 'Without (default network model)', align: 'right', render: (_, t) => t.unmatched.length },
+                { title: 'With a dynamic model', align: 'right', render: (_, t) => t.total - t.unmatched_count },
+                { title: 'Without (default network model)', align: 'right', render: (_, t) => t.unmatched_count },
               ]}
               expandable={{
-                rowExpandable: t => t.unmatched.length > 0,
+                rowExpandable: t => t.unmatched_count > 0,
                 expandedRowRender: t => (
                   <Text type="secondary" style={{ fontSize: 12 }}>
-                    Without a dynamic model: {t.unmatched.slice(0, MAX_LISTED_IDS).join(', ')}
-                    {t.unmatched.length > MAX_LISTED_IDS ? ` … and ${t.unmatched.length - MAX_LISTED_IDS} more` : ''}
+                    Without a dynamic model: {t.unmatched.join(', ')}
+                    {t.unmatched_count > t.unmatched.length ? ` … and ${t.unmatched_count - t.unmatched.length} more` : ''}
                   </Text>
                 ),
               }} />
