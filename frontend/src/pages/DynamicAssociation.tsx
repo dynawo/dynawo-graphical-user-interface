@@ -94,6 +94,14 @@ const SOLVERS = [
 ]
 const MAX_LISTED_IDS = 200
 
+// Model dropdown width (px), fitting the longest model names. A number keeps
+// the dropdown virtual, unlike `false`.
+const MODEL_POPUP_WIDTH = 640
+
+// Width of a select fitting its value, within [min, max] characters.
+const fitWidth = (text: string, min: number, max = 90) =>
+  `${Math.min(max, Math.max(min, text.length + 6))}ch`
+
 let nextKey = 1
 const withKey = (rule: Rule): UiRule => ({ ...rule, _key: nextKey++ })
 const withoutKey = ({ _key, ...rule }: UiRule): Rule => { void _key; return rule }
@@ -195,6 +203,8 @@ function RuleCard({ rule, index, count, report, elementTypes, attributes, models
     ]
   }, [models, typeLabel])
   const parFile = sources?.files.find(f => f.name === rule.par_file)
+  const category = models.find(m => m.name === rule.model)?.category
+  const modelLabel = category ? `${rule.model} · ${category}` : rule.model
 
   const setCondition = (i: number, c: Condition) =>
     onChange({ ...rule, conditions: rule.conditions.map((x, j) => (j === i ? c : x)) })
@@ -228,7 +238,8 @@ function RuleCard({ rule, index, count, report, elementTypes, attributes, models
             options={elementTypes.map(t => ({ value: t.id, label: t.label }))}
             onChange={v => onChange({ ...rule, element_type: v, conditions: [], model: '' })} />
           <Text>the model</Text>
-          <Select showSearch style={{ width: 420 }} placeholder="model" value={rule.model || undefined}
+          <Select showSearch style={{ width: fitWidth(modelLabel, 20), maxWidth: '100%' }} placeholder="model"
+            value={rule.model || undefined} popupMatchSelectWidth={MODEL_POPUP_WIDTH}
             options={modelOptions} optionFilterProp="value"
             onChange={v => onChange({ ...rule, model: v })} />
         </Space>
@@ -274,7 +285,8 @@ function RuleCard({ rule, index, count, report, elementTypes, attributes, models
             <Text type="secondary">the generic set of {rule.model || 'the model'}</Text>
           )}
           {rule.par_source === 'manual' && (<>
-            <Input style={{ width: 220 }} placeholder={rule.model || 'set name'} value={rule.parameter_set_id}
+            <Input style={{ width: fitWidth(rule.parameter_set_id || rule.model, 20), maxWidth: '100%' }}
+              placeholder={rule.model || 'set name'} value={rule.parameter_set_id}
               onChange={e => onChange({ ...rule, parameter_set_id: e.target.value })} />
             <Text type="secondary">created empty, to fill in Edit Parameters after generating</Text>
           </>)}
