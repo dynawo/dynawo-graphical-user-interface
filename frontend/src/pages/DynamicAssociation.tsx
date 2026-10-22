@@ -13,7 +13,7 @@ import { useNavigate } from 'react-router-dom'
 import {
   Alert, Button, Card, Collapse, Input, InputNumber, Radio, Select, Space, Table, Tag, Tooltip, Typography,
 } from 'antd'
-import { ArrowDownOutlined, ArrowUpOutlined, CodeOutlined, DeleteOutlined, PlusOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import { ArrowDownOutlined, ArrowUpOutlined, CodeOutlined, CopyOutlined, DeleteOutlined, PlusOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import client from '../api/client'
 import { errorDetail, retryTransient } from '../api/errors'
 
@@ -178,7 +178,7 @@ function ConditionRow({ condition, attributes, onChange, onRemove }: {
 
 // ── One rule ──────────────────────────────────────────────────────────────────
 
-function RuleCard({ rule, index, count, report, elementTypes, attributes, models, sources, onChange, onMove, onRemove }: {
+function RuleCard({ rule, index, count, report, elementTypes, attributes, models, sources, onChange, onMove, onDuplicate, onRemove }: {
   rule: UiRule
   index: number
   count: number
@@ -189,6 +189,7 @@ function RuleCard({ rule, index, count, report, elementTypes, attributes, models
   sources: ParamSources | null
   onChange: (r: UiRule) => void
   onMove: (delta: number) => void
+  onDuplicate: () => void
   onRemove: () => void
 }) {
   const typeLabel = elementTypes.find(t => t.id === rule.element_type)?.label ?? rule.element_type
@@ -225,6 +226,9 @@ function RuleCard({ rule, index, count, report, elementTypes, attributes, models
         </Tooltip>
         <Tooltip title="Move down">
           <Button type="text" icon={<ArrowDownOutlined />} disabled={index === count - 1} onClick={() => onMove(1)} />
+        </Tooltip>
+        <Tooltip title="Duplicate (the copy is added just after this rule)">
+          <Button type="text" icon={<CopyOutlined />} onClick={onDuplicate} />
         </Tooltip>
         <Tooltip title="Remove this rule">
           <Button type="text" danger icon={<DeleteOutlined />} onClick={onRemove} />
@@ -383,6 +387,11 @@ export default function DynamicAssociation() {
   }, [options, loaded])
 
   const updateRule = (i: number, rule: UiRule) => setRules(prev => prev.map((r, j) => (j === i ? rule : r)))
+  const duplicateRule = (i: number) => setRules(prev => [
+    ...prev.slice(0, i + 1),
+    withKey({ ...withoutKey(prev[i]), conditions: prev[i].conditions.map(c => ({ ...c, value: Array.isArray(c.value) ? [...c.value] : c.value })) }),
+    ...prev.slice(i + 1),
+  ])
   const moveRule = (i: number, delta: number) => setRules(prev => {
     const next = [...prev]
     ;[next[i], next[i + delta]] = [next[i + delta], next[i]]
@@ -460,6 +469,7 @@ export default function DynamicAssociation() {
             sources={sources}
             onChange={r => updateRule(i, r)}
             onMove={delta => moveRule(i, delta)}
+            onDuplicate={() => duplicateRule(i)}
             onRemove={() => setRules(prev => prev.filter((_, j) => j !== i))} />
         ))}
         <Button type="dashed" icon={<PlusOutlined />} disabled={!loaded || !elementTypes.length}
