@@ -34,15 +34,18 @@ from backend.association_generate import (
 )
 from backend.association_par import (
     FILE,
+    GENERIC_PAR_PATH,
     MANUAL,
     assemble_par,
     check_rule_parameters,
+    file_set_ids,
     for_powsybl,
     generic_par,
     set_ids,
     spec_key,
 )
 from backend.association_rules import (
+    attribute_values,
     describe_attributes,
     element_table,
     get_element_type,
@@ -141,10 +144,41 @@ def _read(session: UserSession, name: str) -> bytes:
         return fh.read()
 
 
-def _user_par_files(session: UserSession) -> dict[str, bytes]:
+def _user_par_names(session: UserSession) -> list[str]:
     """User .par files of the session, generated ones excluded."""
-    return {n: _read(session, n) for n, m in session.uploaded_files_info.items()
-            if m.get("ftype") == "par" and not _is_generated(session, n)}
+    return sorted(n for n, m in session.uploaded_files_info.items()
+                  if m.get("ftype") == "par" and not _is_generated(session, n))
+
+
+def _user_par_sets(session: UserSession) -> dict[str, set[str]]:
+    """Set ids of each user .par file (cached per file version)."""
+    sets = {}
+    for name in _user_par_names(session):
+        ids = file_set_ids(session.session_manager.get_path(name))
+        if ids is not None:
+            sets[name] = set(ids)
+    return sets
+
+
+def _generic_sets() -> set[str] | None:
+    ids = file_set_ids(GENERIC_PAR_PATH)
+    return set(ids) if ids is not None else None
+
+
+def _tables(session: UserSession) -> dict:
+    """Element tables cache of the loaded network, reset when it changes."""
+    cache = session.association_tables
+    if cache.get("network") is not session.network:
+        cache.clear()
+        cache.update(network=session.network, tables={})
+    return cache["tables"]
+
+
+def _table(session: UserSession, entry: dict):
+    tables = _tables(session)
+    if entry["id"] not in tables:
+        tables[entry["id"]] = element_table(_network(session), entry)
+    return tables[entry["id"]]
 
 
 def _previous_generated_par(session: UserSession, role: str) -> bytes | None:
@@ -185,10 +219,22 @@ def get_element_types():
 def get_element_type_attributes(type_id: str, session: UserSession = Depends(get_session)):
     """Attributes a condition can test on this element type."""
     entry = _element_type(type_id)
-    network = _network(session)
     with pypowsybl_slot():
-        df = element_table(network, entry)
+        df = _table(session, entry)
     return {"element_type": type_id, "count": len(df), "attributes": describe_attributes(df)}
+
+
+@router.get("/element-types/{type_id}/values")
+def get_attribute_values(type_id: str, attribute: str, search: str = "", limit: int = 50,
+                         session: UserSession = Depends(get_session)):
+    """Values of an attribute containing `search`, for proposing ids and the like."""
+    entry = _element_type(type_id)
+    with pypowsybl_slot():
+        df = _table(session, entry)
+    if attribute not in df.columns:
+        raise HTTPException(status_code=404, detail=f"Unknown attribute '{attribute}'")
+    values, total = attribute_values(df, attribute, search, max(1, min(limit, 500)))
+    return {"values": values, "total": total}
 
 
 @router.get("/models")
@@ -239,11 +285,10 @@ def put_options(req: GenerationOptions, session: UserSession = Depends(get_sessi
 @router.get("/parameter-sources")
 def get_parameter_sources(session: UserSession = Depends(get_session)):
     """User .par files with their set ids, and the generic .par if available."""
-    generic = generic_par()
-    return {
-        "files":   [{"name": n, "sets": set_ids(c)} for n, c in sorted(_user_par_files(session).items())],
-        "generic": {"available": generic is not None, "sets": set_ids(generic) if generic else []},
-    }
+    generic = file_set_ids(GENERIC_PAR_PATH)
+    files = [{"name": n, "sets": file_set_ids(session.session_manager.get_path(n)) or []}
+             for n in _user_par_names(session)]
+    return {"files": files, "generic": {"available": generic is not None, "sets": generic or []}}
 
 
 @router.post("/resolve")
@@ -251,10 +296,10 @@ def post_resolve(req: RulesRequest, session: UserSession = Depends(get_session))
     """Apply the rules to the loaded network without generating."""
     network = _network(session)
     catalogue = _catalogue()
-    par_files, generic = _user_par_files(session), generic_par()
+    par_sets, generic_sets = _user_par_sets(session), _generic_sets()
     with pypowsybl_slot():
         return resolve(network, [r.model_dump() for r in req.rules], catalogue,
-                       lambda rule: check_rule_parameters(rule, par_files, generic))
+                       lambda rule: check_rule_parameters(rule, par_sets, generic_sets), _tables(session))
 
 
 def _network_or_solver_par(
@@ -312,7 +357,7 @@ def post_generate(req: GenerateRequest, session: UserSession = Depends(get_sessi
         raise HTTPException(status_code=400, detail="stop_time must be greater than start_time")
 
     rules = [r.model_dump() for r in req.rules]
-    par_files, generic = _user_par_files(session), generic_par()
+    par_sets, generic_sets = _user_par_sets(session), _generic_sets()
     network_par, network_id, network_to_fill = _network_or_solver_par(
         session, req.network_par_file or ref_network_par,
         req.network_par_id or ref_network_id or "Network", "network", "Network",
@@ -334,12 +379,14 @@ def post_generate(req: GenerateRequest, session: UserSession = Depends(get_sessi
 
         with pypowsybl_slot():
             resolution = resolve(network, rules, _catalogue(),
-                                 lambda rule: check_rule_parameters(rule, par_files, generic))
+                                 lambda rule: check_rule_parameters(rule, par_sets, generic_sets), _tables(session))
             if not resolution["assignments"]:
                 raise HTTPException(status_code=400, detail="The rules put a model on no element: nothing to generate")
+            specs = [spec_key(rules[a["rule"]]) for a in resolution["assignments"]]
+            # Only the files the rules use are read.
+            par_files = {f: _read(session, f) for source, f, _ in set(specs) if source == FILE}
             models_par, set_of, models_to_fill = assemble_par(
-                [spec_key(rules[a["rule"]]) for a in resolution["assignments"]],
-                par_files, generic, _previous_generated_par(session, "models"),
+                specs, par_files, generic_par(), _previous_generated_par(session, "models"),
             )
             assignments = [{**a, "parameter_set_id": set_of[spec_key(rules[a["rule"]])]}
                            for a in resolution["assignments"]]

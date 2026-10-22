@@ -90,6 +90,8 @@ class UserSession:
     # Generation settings and last generation result.
     association_options: dict = field(default_factory=dict)
     association_last_result: dict | None = None
+    # Element tables of the loaded network by type id: {"network": ..., "tables": {...}}.
+    association_tables: dict = field(default_factory=dict)
 
     # Parameter change logs
     par_change_log: list[ChangeLogEntry] = field(default_factory=list)

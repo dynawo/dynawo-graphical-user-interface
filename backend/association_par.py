@@ -39,6 +39,25 @@ def generic_par() -> bytes | None:
         return None
 
 
+# path -> ((mtime_ns, size), set ids): large .par files are parsed once per version.
+_set_ids_cache: dict[str, tuple[tuple[int, int], list[str]]] = {}
+
+
+def file_set_ids(path: str) -> list[str] | None:
+    """Set ids of a .par file, cached until the file changes; None if absent."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    version = (st.st_mtime_ns, st.st_size)
+    cached = _set_ids_cache.get(path)
+    if cached is None or cached[0] != version:
+        with open(path, "rb") as fh:
+            cached = (version, set_ids(fh.read()))
+        _set_ids_cache[path] = cached
+    return cached[1]
+
+
 def set_ids(content: bytes) -> list[str]:
     """Ids of the <set>s of a .par file, in file order; [] if unreadable."""
     try:
@@ -59,8 +78,11 @@ def spec_key(rule: dict) -> tuple[str, str, str]:
     return MANUAL, "", rule.get("parameter_set_id") or rule.get("model", "")
 
 
-def check_rule_parameters(rule: dict, par_files: dict[str, bytes], generic: bytes | None) -> list[str]:
-    """Errors in a rule's parameter set, [] if none."""
+def check_rule_parameters(rule: dict, par_sets: dict[str, set[str]], generic_sets: set[str] | None) -> list[str]:
+    """Errors in a rule's parameter set, [] if none.
+
+    `par_sets`: set ids of each session .par file; `generic_sets`: those of
+    the generic .par, None if it is absent."""
     source = rule.get("par_source") or FILE
     if source not in SOURCES:
         return [f"unknown parameter source '{source}'"]
@@ -68,16 +90,16 @@ def check_rule_parameters(rule: dict, par_files: dict[str, bytes], generic: byte
     if source == FILE:
         if not par_file:
             return ["no parameters file chosen"]
-        if par_file not in par_files:
+        if par_file not in par_sets:
             return [f"parameters file '{par_file}' is not in the session"]
         if not set_id:
             return ["no parameter set chosen"]
-        if set_id not in set_ids(par_files[par_file]):
+        if set_id not in par_sets[par_file]:
             return [f"parameter set '{set_id}' is not in '{par_file}'"]
     elif source == GENERIC:
-        if generic is None:
+        if generic_sets is None:
             return ["the generic parameters file is not available yet"]
-        if set_id not in set_ids(generic):
+        if set_id not in generic_sets:
             return [f"the generic parameters file has no set for model '{set_id}'"]
     elif not set_id:
         return ["no parameter set name"]
