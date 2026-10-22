@@ -188,6 +188,17 @@ def read_network_iidm(jobs_path: str) -> str | None:
         return None
 
 
+def read_network_par(jobs_path: str) -> tuple[str | None, str | None]:
+    """Return (parFile, parId) of the <network> element, None for what is absent."""
+    try:
+        network = ET.parse(jobs_path).getroot().find(f".//{{{_NS}}}network")
+        if network is None:
+            return None, None
+        return network.get("parFile") or None, network.get("parId") or None
+    except Exception:
+        return None, None
+
+
 def write_network_iidm(jobs_path: str, iidm_filename: str) -> None:
     """Patch the iidmFile attribute in the <network> element of a jobs XML file."""
     ET.register_namespace("dyn", _NS)

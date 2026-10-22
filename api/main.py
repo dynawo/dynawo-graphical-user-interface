@@ -19,7 +19,7 @@ bootstrap_powsybl_config_dir()
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routers import admin, auth, autoload, curves, dynaflow_launcher, dynawo_version, events, files, loadflow, network, parameters, simulation, solver
+from api.routers import admin, auth, autoload, curves, dynaflow_launcher, dynamic_association, dynawo_version, events, files, loadflow, network, parameters, simulation, solver
 from api.session_store import store
 
 app = FastAPI(title="Dynawo GUI API", version="0.1.0")
@@ -47,6 +47,7 @@ app.include_router(autoload.router,         prefix="/api/autoload")
 app.include_router(auth.router,             prefix="/api/auth")
 app.include_router(dynawo_version.router,   prefix="/api/dynawo")
 app.include_router(dynaflow_launcher.router, prefix="/api/dynaflow-launcher")
+app.include_router(dynamic_association.router, prefix="/api/dynamic-association")
 app.include_router(files.router,            prefix="/api/files")
 app.include_router(network.router,          prefix="/api/network")
 app.include_router(loadflow.router,         prefix="/api/loadflow")

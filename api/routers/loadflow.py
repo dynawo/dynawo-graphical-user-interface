@@ -87,6 +87,11 @@ def restart_pypowsybl_pool() -> None:
         gc.collect()
 
 
+def pypowsybl_pool() -> ProcessPoolExecutor:
+    """Current worker pool (replaced by restart_pypowsybl_pool)."""
+    return _pypowsybl_pool
+
+
 def shutdown_pypowsybl_pool() -> None:
     _pypowsybl_pool.shutdown(wait=True, cancel_futures=True)
 

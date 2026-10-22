@@ -115,6 +115,11 @@ def clear_dynaflow_home() -> None:
 # in flight.
 
 _worker_tmp_dir: str | None = None
+_worker_fake_dynawo_dir: str | None = None
+
+# Fake Dynawo of the dynamic association, copied into each worker (the
+# version it reports is written per worker).
+_FAKE_DYNAWO_SCRIPT = os.path.join(os.path.dirname(__file__), "..", "resources", "fake_dynawo", "dynawo.sh")
 
 
 def worker_tmp_dir() -> str | None:
@@ -123,20 +128,36 @@ def worker_tmp_dir() -> str | None:
     return _worker_tmp_dir
 
 
+def worker_fake_dynawo_dir() -> str | None:
+    """The fake Dynawo home private to *this* worker process, or None outside
+    a worker."""
+    return _worker_fake_dynawo_dir
+
+
 def bootstrap_worker_config_dir(worker_dir: str) -> str:
     """Per-worker analogue of bootstrap_powsybl_config_dir(). Must run before
     this worker process's first pypowsybl import — GraalVM reads
     powsybl.config.dirs at init time only. Returns the worker's private
     computation-local.tmp-dir.
     """
-    global _worker_tmp_dir
+    global _worker_tmp_dir, _worker_fake_dynawo_dir
+    import shutil
+
     os.makedirs(worker_dir, exist_ok=True)
     tmp_dir = os.path.join(worker_dir, "tmp")
     os.makedirs(tmp_dir, exist_ok=True)
+    fake_dynawo_dir = os.path.join(worker_dir, "fake_dynawo")
+    os.makedirs(fake_dynawo_dir, exist_ok=True)
+    fake_script = os.path.join(fake_dynawo_dir, "dynawo.sh")
+    shutil.copyfile(_FAKE_DYNAWO_SCRIPT, fake_script)
+    os.chmod(fake_script, 0o755)
 
     shared = _load_config()
     data = {
         "dynaflow": dict(shared.get("dynaflow") or {}),
+        # Used only by the dynamic association, which needs the input files
+        # PowSyBl writes, not a simulation.
+        "dynawo": {"homeDir": fake_dynawo_dir, "debug": True},
         "computation-local": {"tmp-dir": tmp_dir},
     }
     if shared.get("load-flow-default-parameters"):
@@ -163,6 +184,7 @@ def bootstrap_worker_config_dir(worker_dir: str) -> str:
     os.environ["GRAALVM_OPTIONS"] = (existing + " " + opt).strip()
 
     _worker_tmp_dir = tmp_dir
+    _worker_fake_dynawo_dir = fake_dynawo_dir
     return tmp_dir
 
 

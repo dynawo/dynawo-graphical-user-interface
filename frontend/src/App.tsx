@@ -11,7 +11,7 @@
 import { useEffect, useState } from 'react'
 import { BrowserRouter, useLocation, useNavigate, Route, Routes } from 'react-router-dom'
 import { ConfigProvider, Layout, Menu, Button, Popconfirm, theme, Tooltip, Typography } from 'antd'
-import { ApartmentOutlined, ClearOutlined, CloudUploadOutlined, DownloadOutlined, EditOutlined, InfoCircleOutlined, LineChartOutlined, MoonOutlined, PlayCircleOutlined, SettingOutlined, SunOutlined, ThunderboltOutlined, ToolOutlined, WarningOutlined } from '@ant-design/icons'
+import { ApartmentOutlined, ClearOutlined, ClusterOutlined, CloudUploadOutlined, DownloadOutlined, EditOutlined, InfoCircleOutlined, LineChartOutlined, MoonOutlined, PlayCircleOutlined, SettingOutlined, SunOutlined, ThunderboltOutlined, ToolOutlined, WarningOutlined } from '@ant-design/icons'
 import client from './api/client'
 
 // Module-level promise — created once regardless of StrictMode double-mount.
@@ -24,6 +24,7 @@ function initSession() {
 import About from './pages/About'
 import Upload from './pages/Upload'
 import DynawoVersion from './pages/DynawoVersion'
+import DynamicAssociation from './pages/DynamicAssociation'
 import EditCurves from './pages/EditCurves'
 import Events from './pages/Events'
 import EditParameters from './pages/EditParameters'
@@ -56,6 +57,7 @@ const NAV_ITEMS = [
   { key: '/dynawo-version',         label: 'Dynawo Version',        icon: <SettingOutlined /> },
   { key: '/network-view',           label: 'Network View',          icon: <ApartmentOutlined /> },
   { key: '/load-flow',              label: 'Load Flow / DynaFlow',  icon: <ThunderboltOutlined /> },
+  { key: '/dynamic-association',    label: 'Dynamic Association',   icon: <ClusterOutlined /> },
   { key: '/edit-parameters',        label: 'Edit Parameters',       icon: <EditOutlined /> },
   { key: '/edit-solver-parameters', label: 'Edit Solver Params',    icon: <ToolOutlined /> },
   { key: '/edit-curves',            label: 'Edit Curves',           icon: <LineChartOutlined /> },
@@ -154,6 +156,7 @@ function AppLayout({ isDark, toggleTheme }: { isDark: boolean; toggleTheme: () =
             <Route path="/dynawo-version" element={<DynawoVersion />} />
             <Route path="/network-view" element={<NetworkView />} />
             <Route path="/load-flow" element={<LoadFlow />} />
+            <Route path="/dynamic-association" element={<DynamicAssociation />} />
             <Route path="/edit-parameters" element={<EditParameters />} />
             <Route path="/edit-solver-parameters" element={<EditSolverParameters />} />
             <Route path="/edit-curves" element={<EditCurves />} />
