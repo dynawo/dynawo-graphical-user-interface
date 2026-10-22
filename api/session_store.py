@@ -83,6 +83,14 @@ class UserSession:
     # expensive enough to be worth not repeating on every click.
     events_cache: dict = field(default_factory=dict)
 
+    # Dynamic Association page: rules (see backend/association_rules.py).
+    association_rules: list[dict] = field(default_factory=list)
+    # Last generation, reproduced by the script export.
+    association_last_generation: dict | None = None
+    # Generation settings and last generation result.
+    association_options: dict = field(default_factory=dict)
+    association_last_result: dict | None = None
+
     # Parameter change logs
     par_change_log: list[ChangeLogEntry] = field(default_factory=list)
     solver_change_log: list[ChangeLogEntry] = field(default_factory=list)

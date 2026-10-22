@@ -1,0 +1,57 @@
+{
+  "_comment": [
+    "IIDM element types a dynamic-association rule can target.",
+    "getter: pypowsybl Network method listing the elements.",
+    "categories: model categories fitting the type; they order the model list, never restrict it."
+  ],
+  "element_types": [
+    {
+      "id": "GENERATOR",
+      "label": "Generators",
+      "getter": "get_generators",
+      "categories": ["SynchronousGenerator", "SynchronizedGenerator", "SimplifiedGenerator", "SignalNGenerator", "Wecc", "GridFormingConverter", "InertialGrid"]
+    },
+    {
+      "id": "LOAD",
+      "label": "Loads",
+      "getter": "get_loads",
+      "categories": ["Load", "LoadOneTransformer", "LoadOneTransformerTapChanger", "LoadTwoTransformers", "LoadTwoTransformersTapChangers"]
+    },
+    {
+      "id": "LINE",
+      "label": "Lines",
+      "getter": "get_lines",
+      "categories": ["Line"]
+    },
+    {
+      "id": "TWO_WINDINGS_TRANSFORMER",
+      "label": "Two-winding transformers",
+      "getter": "get_2_windings_transformers",
+      "categories": ["Transformer"]
+    },
+    {
+      "id": "SHUNT_COMPENSATOR",
+      "label": "Shunt compensators",
+      "getter": "get_shunt_compensators",
+      "categories": ["Shunt"]
+    },
+    {
+      "id": "STATIC_VAR_COMPENSATOR",
+      "label": "Static VAR compensators",
+      "getter": "get_static_var_compensators",
+      "categories": ["StaticVarCompensator"]
+    },
+    {
+      "id": "HVDC_LINE",
+      "label": "HVDC lines",
+      "getter": "get_hvdc_lines",
+      "categories": ["HvdcP", "HvdcVsc"]
+    },
+    {
+      "id": "BUS",
+      "label": "Buses (bus-breaker view)",
+      "getter": "get_bus_breaker_view_buses",
+      "categories": ["Bus", "InfiniteBus"]
+    }
+  ]
+}
