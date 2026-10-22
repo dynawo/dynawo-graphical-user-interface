@@ -14,6 +14,7 @@ Two scripts wrap the full dev setup:
 ./install.sh       # create the venv, install backend + frontend dependencies
 ./run.sh           # start both servers; open http://localhost:5173
 ./run.sh --test    # run the unit tests (see Tests below)
+./install.sh --doc # build the user guide PDF (see User guide below)
 ```
 
 `install.sh` checks prerequisites (Python ≥ 3.10, Node ≥ 18), verifies the
@@ -27,8 +28,8 @@ To reset a broken or stale install, re-run with `--clean`, which removes the
 virtual environment and the frontend dependencies before reinstalling:
 
 ```bash
-./install.sh --clean   # delete .venv and frontend/node_modules,
-                       # then reinstall
+./install.sh --clean   # delete .venv, frontend/node_modules and the
+                       # LaTeX build files, then reinstall
 ```
 
 The tracked `frontend/package-lock.json` is kept (so dependencies reinstall at
@@ -197,6 +198,24 @@ Options after `--test` go to pytest, to run part of the backend tests:
 
 The frontend tests on their own: `cd frontend && npm test`, or `npx vitest`
 to re-run them on every save.
+
+---
+
+## User guide
+
+The user guide is written in LaTeX ([`docs/user_guide.tex`](docs/user_guide.tex)).
+To build the PDF:
+
+```bash
+./install.sh --doc           # writes docs/user_guide.pdf
+./install.sh --doc --clean   # remove previous build files first, then build
+```
+
+`--doc` builds only the guide — it does not touch the Python or Node setup —
+and needs `latexmk` and `pdflatex`, which a regular install does not. If they
+are missing, it prints how to install them (on Debian/Ubuntu:
+`sudo apt install latexmk texlive-latex-extra`). If the build fails, the full
+LaTeX log is in `docs/user_guide.log`.
 
 ---
 

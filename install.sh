@@ -19,8 +19,12 @@
 #   ./install.sh          # install / update everything (idempotent)
 #   ./install.sh --clean  # remove .venv and frontend/node_modules, then
 #                         # reinstall (the tracked package-lock.json is kept)
+#   ./install.sh --doc    # build only the user guide (docs/user_guide.pdf);
+#                         # needs latexmk and pdflatex, skips everything else
 #
 # --clean does NOT remove downloaded Dynawo versions (~/.config/dynawo_ihm/).
+# It also removes the LaTeX build files from docs/; with --doc it does only
+# that, then rebuilds the user guide from scratch.
 
 set -euo pipefail
 
@@ -30,6 +34,8 @@ cd "$ROOT"
 
 VENV_DIR="$ROOT/.venv"
 FRONTEND_DIR="$ROOT/frontend"
+DOC_DIR="$ROOT/docs"
+DOC_TEX="user_guide.tex"
 
 # Minimum supported versions (see README).
 PY_MIN_MAJOR=3
@@ -46,9 +52,11 @@ fail()  { printf '\033[1;31m ✗\033[0m %s\n' "$*" >&2; exit 1; }
 # --- argument parsing --------------------------------------------------------
 
 CLEAN=0
+DOC=0
 for arg in "$@"; do
     case "$arg" in
         --clean) CLEAN=1 ;;
+        --doc) DOC=1 ;;
         -h|--help)
             # Print the leading doc-comment block (skip shebang, stop at code).
             awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "${BASH_SOURCE[0]}"
@@ -57,6 +65,42 @@ for arg in "$@"; do
         *) fail "Unknown option: $arg (try --help)" ;;
     esac
 done
+
+# --- user guide (--doc) ------------------------------------------------------
+# Building the PDF needs neither Python nor Node, so --doc runs on its own and
+# exits before the prerequisite checks below. LaTeX is never needed for a
+# regular install.
+
+# Remove the LaTeX build files, PDF included. Quietly does nothing when
+# latexmk is absent — then there is nothing it could have produced either.
+clean_doc() {
+    command -v latexmk >/dev/null 2>&1 || return 0
+    ( cd "$DOC_DIR" && latexmk -C -quiet "$DOC_TEX" >/dev/null 2>&1 ) || true
+}
+
+if [ "$DOC" -eq 1 ]; then
+    info "Building the user guide"
+    for tool in latexmk pdflatex; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            fail "$tool not found. Install a TeX distribution with latexmk:
+       Debian/Ubuntu:  sudo apt install latexmk texlive-latex-extra
+       Fedora:         sudo dnf install latexmk texlive-scheme-medium
+       macOS (brew):   brew install --cask mactex-no-gui"
+        fi
+    done
+    if [ "$CLEAN" -eq 1 ]; then
+        clean_doc
+        ok "Removed previous LaTeX build files"
+    fi
+    # Build from inside docs/: the .tex references ../resources/ relative to it.
+    # -interaction=nonstopmode stops on the first error instead of waiting for
+    # input; the full log stays in docs/user_guide.log.
+    if ! ( cd "$DOC_DIR" && latexmk -pdf -interaction=nonstopmode -halt-on-error -quiet "$DOC_TEX" ); then
+        fail "LaTeX build failed — see docs/${DOC_TEX%.tex}.log"
+    fi
+    ok "User guide built: docs/${DOC_TEX%.tex}.pdf"
+    exit 0
+fi
 
 # --- prerequisite checks -----------------------------------------------------
 
@@ -147,7 +191,8 @@ if [ "$CLEAN" -eq 1 ]; then
     # tree. Removing node_modules is enough to force a clean reinstall against
     # the committed lockfile.
     rm -rf "$VENV_DIR" "$FRONTEND_DIR/node_modules"
-    ok "Removed .venv and frontend/node_modules"
+    clean_doc
+    ok "Removed .venv, frontend/node_modules and the LaTeX build files"
 fi
 
 # --- backend -----------------------------------------------------------------
