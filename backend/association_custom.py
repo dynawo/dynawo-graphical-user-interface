@@ -15,13 +15,13 @@ import re
 import threading
 import xml.etree.ElementTree as ET
 
-from backend.association_catalogue import EQUIPMENT
-
 # Models added by the user: libraries of the selected Dynawo's ddb unknown to
 # PowSyBl, declared to it through powsybl-dynawo's additional models file.
 # A library is offered for a category when its .desc.xml declares what
 # PowSyBl uses for that category (connected variables, values it reads),
 # learnt by generating a built-in model of the category with the fake Dynawo.
+# An automation system is generated on an element given the equipment model
+# it connects to, whose own variables and values are left out.
 
 _NS = "{http://www.rte-france.com/dynawo}"
 
@@ -69,6 +69,8 @@ def probe_interfaces_in_worker(dynawo_version: str, categories: list[dict]) -> d
     """Worker entry point. For each {category, element_type, model}: what
     PowSyBl uses of a model of that category, by generating `model` on an
     element of pypowsybl's four-substation network with an empty parameter set.
+    Automation systems also hold `automation`: {element_fields, fields (other
+    field values), equipment: {category, model} or None}.
 
     Returns {category: {internal, variables, parameters} or {error}}; `internal`
     is PowSyBl's own category name, used in the additional models file."""
@@ -87,11 +89,13 @@ def probe_interfaces_in_worker(dynawo_version: str, categories: list[dict]) -> d
     network = pp.network.create_four_substations_node_breaker_network()
     par_path = os.path.join(tmp_dir, "probe.par")
 
-    def run(mapping, values: list[str]) -> tuple[str, str | None, bytes | None]:
-        pars = "".join(f'<dyn:par type="DOUBLE" name="{n}" value="1"/>' for n in values)
+    def run(mapping, values: dict[str, list[str]]) -> tuple[str, str | None, bytes | None]:
+        sets = "".join(f'<dyn:set id="{s}">'
+                       + "".join(f'<dyn:par type="DOUBLE" name="{n}" value="1"/>' for n in values.get(s, []))
+                       + "</dyn:set>" for s in ("P", "E"))
         with open(par_path, "w", encoding="utf-8") as fh:
             fh.write('<?xml version="1.0"?><dyn:parametersSet xmlns:dyn="http://www.rte-france.com/dynawo">'
-                     f'<dyn:set id="P">{pars}</dyn:set><dyn:set id="N"/><dyn:set id="S"/></dyn:parametersSet>')
+                     f'{sets}<dyn:set id="N"/><dyn:set id="S"/></dyn:parametersSet>')
         report = rep.ReportNode()
         before = _dynawo_run_dirs(tmp_dir)
         error = None
@@ -112,39 +116,54 @@ def probe_interfaces_in_worker(dynawo_version: str, categories: list[dict]) -> d
         _cleanup_dynawo_run_dirs(tmp_dir, new_dirs)
         return str(report), error, dyd
 
+    def add(mapping, c: dict, element: str, model: str) -> str:
+        """Add a model of the category on the element; returns its dynamic model id."""
+        automation = c.get("automation")
+        if automation is None:
+            mapping.add_dynamic_model(category_name=c["category"], static_id=element,
+                                      parameter_set_id="P", model_name=model)
+            return element
+        if automation["equipment"]:
+            mapping.add_dynamic_model(category_name=automation["equipment"]["category"], static_id=element,
+                                      parameter_set_id="E", model_name=automation["equipment"]["model"])
+        dynamic_id = _PROBE_PREFIX + "AUTOMATION"
+        mapping.add_dynamic_model(category_name=c["category"], dynamic_model_id=dynamic_id, parameter_set_id="P",
+                                  model_name=model, **{f: element for f in automation["element_fields"]},
+                                  **automation["fields"])
+        return dynamic_id
+
     results: dict[str, dict] = {}
     # PowSyBl's internal category names: its error for an unknown model names them.
-    mapping = dyn.ModelMapping()
+    internal = {}
     for c in categories:
         element = _probe_element(network, c["element_type"], c["category"])
         if element:
-            mapping.add_dynamic_model(category_name=c["category"], static_id=element,
-                                      parameter_set_id="P", model_name=_PROBE_PREFIX + c["category"])
-    report, _, _ = run(mapping, [])
-    internal = dict(_INTERNAL_CATEGORY.findall(report))
+            mapping = dyn.ModelMapping()
+            add(mapping, c, element, _PROBE_PREFIX + c["category"])
+            report, _, _ = run(mapping, {})
+            internal.update(_INTERNAL_CATEGORY.findall(report))
 
     for c in categories:
         element = _probe_element(network, c["element_type"], c["category"])
         if not element:
             results[c["category"]] = {"error": "no element to probe"}
             continue
-        values: list[str] = []
+        values: dict[str, list[str]] = {}
         for _ in range(10):
             mapping = dyn.ModelMapping()
-            mapping.add_dynamic_model(category_name=c["category"], static_id=element,
-                                      parameter_set_id="P", model_name=c["model"])
+            model_id = add(mapping, c, element, c["model"])
             _, error, dyd = run(mapping, values)
             missing = _MISSING_PARAMETER.search(error or "")
-            if not missing:
+            if not missing or missing.group(2) not in ("P", "E"):
                 break
-            values.append(missing.group(1))
+            values.setdefault(missing.group(2), []).append(missing.group(1))
         if error or dyd is None:
             results[c["category"]] = {"error": error or "nothing written"}
             continue
         results[c["category"]] = {
             "internal":   internal.get(c["category"]),
-            "variables":  sorted(_model_variables(dyd, element)),
-            "parameters": values,
+            "variables":  sorted(_model_variables(dyd, model_id)),
+            "parameters": values.get("P", []),
         }
     return results
 
@@ -153,6 +172,8 @@ def _model_variables(dyd: bytes, model_id: str) -> set[str]:
     """Variables of a model PowSyBl uses in a .dyd: its side of each macro
     connection, and its static references."""
     root = ET.fromstring(dyd)
+    model = next((m for m in root.iter(_NS + "blackBoxModel") if m.get("id") == model_id), None)
+    references = {r.get("id") for r in model.iter(_NS + "macroStaticRef")} if model is not None else set()
     connectors = {mc.get("id"): mc for mc in root.iter(_NS + "macroConnector")}
     variables = set()
     for connect in root.iter(_NS + "macroConnect"):
@@ -163,7 +184,10 @@ def _model_variables(dyd: bytes, model_id: str) -> set[str]:
             if connect.get(side) == model_id:
                 variables |= {c.get(var) for c in connector.iter(_NS + "connect") if "@" not in c.get(var, "@")}
     for reference in root.iter(_NS + "macroStaticReference"):
-        variables |= {r.get("var") for r in reference.iter(_NS + "staticRef") if r.get("var")}
+        if reference.get("id") in references:
+            variables |= {r.get("var") for r in reference.iter(_NS + "staticRef") if r.get("var")}
+    if model is not None:
+        variables |= {r.get("var") for r in model.findall(_NS + "staticRef") if r.get("var")}
     return variables
 
 
@@ -223,8 +247,8 @@ def with_custom_models(catalogue: list[dict], models: list[dict]) -> list[dict]:
     for m in models:
         added.setdefault(m["category"], []).append(
             {"name": m["lib"], "description": m.get("doc", ""), "custom": "shared" if m.get("shared") else "live"})
-    return [{**c, "models": c["models"] + sorted(added.get(c["name"], []), key=lambda m: m["name"])}
-            if c["kind"] == EQUIPMENT else c for c in catalogue]
+    return [{**c, "models": c["models"] + sorted(added[c["name"]], key=lambda m: m["name"])}
+            if c["name"] in added else c for c in catalogue]
 
 
 def additional_models_file(models: list[dict]) -> dict:

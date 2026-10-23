@@ -11,6 +11,7 @@
 import copy
 import glob
 import os
+import re
 import shutil
 import subprocess
 import xml.etree.ElementTree as ET
@@ -55,7 +56,8 @@ def _cleanup_dynawo_run_dirs(tmp_dir: str, new_dirs: set[str]) -> None:
 
 
 def build_model_mapping(assignments: list[dict]):
-    """ModelMapping of the assignments, one dataframe per category."""
+    """ModelMapping of the assignments, one dataframe per category: indexed by
+    static_id for equipment, by dynamic_model_id for automation systems."""
     import pandas as pd
     import pypowsybl.dynamic as dyn
 
@@ -64,11 +66,19 @@ def build_model_mapping(assignments: list[dict]):
     for a in assignments:
         by_category.setdefault(a["category"], []).append(a)
     for category, rows in by_category.items():
-        df = pd.DataFrame({
-            "static_id":        [r["static_id"] for r in rows],
-            "parameter_set_id": [r["parameter_set_id"] for r in rows],
-            "model_name":       [r["model"] for r in rows],
-        }).set_index("static_id")
+        if rows[0].get("automation"):
+            df = pd.DataFrame([{
+                "dynamic_model_id": r["dynamic_model_id"],
+                "parameter_set_id": r["parameter_set_id"],
+                "model_name":       r["model"],
+                **r["fields"],
+            } for r in rows]).set_index("dynamic_model_id")
+        else:
+            df = pd.DataFrame({
+                "static_id":        [r["static_id"] for r in rows],
+                "parameter_set_id": [r["parameter_set_id"] for r in rows],
+                "model_name":       [r["model"] for r in rows],
+            }).set_index("static_id")
         mapping.add_dynamic_model(category, df)
     return mapping
 
@@ -219,14 +229,27 @@ def adapt_dyd(content: bytes, names: dict[str, str]) -> bytes:
 def dropped_assignments(assignments: list[dict], dyd: bytes, report: str) -> list[dict]:
     """Assignments missing from the .dyd, with the reason from PowSyBl's report."""
     root = ET.fromstring(dyd)
-    written = {bbm.get("staticId") for bbm in root.iter(f"{{{_NS}}}blackBoxModel")}
+    models = list(root.iter(f"{{{_NS}}}blackBoxModel"))
+    written = {bbm.get("staticId") for bbm in models}
+    written_ids = {bbm.get("id") for bbm in models}
     lines = [l.strip() for l in report.splitlines() if l.strip()]
     dropped = []
     for a in assignments:
-        if a["static_id"] in written:
+        if a.get("automation"):
+            if a["dynamic_model_id"] in written_ids:
+                continue
+            # PowSyBl names automation systems by their id, unquoted.
+            named = re.compile(rf"(?<![\w-]){re.escape(a['dynamic_model_id'])}(?![\w-])")
+            at = next((i for i, l in enumerate(lines) if named.search(l) and "instantiation OK" not in l), None)
+            reason = None if at is None else lines[at]
+            # "instantiation KO" is followed by its cause.
+            if reason and reason.endswith("instantiation KO") and at + 1 < len(lines):
+                reason = f"{reason.lstrip('+ ')}: {lines[at + 1]}"
+        elif a["static_id"] in written:
             continue
-        reason = next((l for l in lines if f"'{a['static_id']}'" in l), None) \
-            or next((l for l in lines if f"Model {a['model']} not found" in l), None) \
+        else:
+            reason = next((l for l in lines if f"'{a['static_id']}'" in l), None)
+        reason = reason or next((l for l in lines if f"Model {a['model']} not found" in l), None) \
             or "left out by PowSyBl (no reason in its report)"
         dropped.append({**a, "reason": reason})
     return dropped

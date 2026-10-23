@@ -20,7 +20,8 @@ import { errorDetail, errorStatus, retryTransient } from '../api/errors'
 const { Title, Text, Paragraph } = Typography
 
 // Dynamic association: rules putting a model on IIDM elements, applied in
-// order. Rules and settings are saved with the session.
+// order. Rules and settings are saved with the session. A rule with an
+// automation-system model adds one automation system per element.
 
 type ParSource = 'file' | 'generic' | 'manual'
 
@@ -32,6 +33,8 @@ interface Rule {
   par_source: ParSource
   par_file: string
   parameter_set_id: string
+  // Automation systems: their other fields (e.g. side); absent ones take the default.
+  fields?: Record<string, string>
 }
 // Page-only key, stable when rules are moved or removed.
 type UiRule = Rule & { _key: number }
@@ -40,7 +43,13 @@ interface ElementType { id: string; label: string }
 interface Attribute { name: string; kind: 'number' | 'boolean' | 'text'; operators: string[]; values: string[] | null }
 // custom: added by the user, shared (all sessions) or live (this session).
 // unavailable: why the selected Dynawo cannot use it (not in its ddb).
-interface Model { name: string; description: string; category: string; suggested: boolean; custom?: 'shared' | 'live'; unavailable?: string }
+// Automation-system field with its values, the first being the default.
+interface AutomationField { name: string; label: string; values: { value: string; label: string }[] }
+interface Model {
+  name: string; description: string; category: string; suggested: boolean; custom?: 'shared' | 'live'; unavailable?: string
+  // Automation systems: their fields, what they need on the element, their id prefix.
+  automation?: boolean; fields?: AutomationField[]; requires?: string | null; id_prefix?: string; note?: string | null
+}
 interface ModelsResponse { dynawo_version: string | null; models: (Model & { available?: boolean })[] }
 
 const withAvailability = (res: ModelsResponse): Model[] => res.models.map(({ available, ...m }) =>
@@ -49,7 +58,10 @@ interface CustomModel { lib: string; category: string; dynawo_version: string; s
 interface ParFile { name: string; sets: string[] }
 interface ParamSources { files: ParFile[]; generic: { available: boolean; sets: string[] } }
 interface RuleReport { index: number; matched: number; applied: number; errors: string[]; warnings: string[] }
-interface Assignment { element_type: string; static_id: string; model: string; category: string; rule: number }
+interface Assignment {
+  element_type: string; static_id: string; model: string; category: string; rule: number
+  automation?: boolean; dynamic_model_id?: string
+}
 // unmatched: the first ids only; unmatched_count: all of them.
 interface TypeSummary { id: string; label: string; total: number; unmatched_count: number; unmatched: string[] }
 interface Resolution { rules: RuleReport[]; assignments: Assignment[]; element_types: TypeSummary[] }
@@ -88,6 +100,7 @@ interface GenerateResult {
   dynawo_version: string
   rules: RuleReport[]
   assigned: number
+  automation_systems: number
   dropped: Dropped[]
   to_fill: ToFill[]
   report: string
@@ -116,7 +129,7 @@ const withoutKey = ({ _key, ...rule }: UiRule): Rule => { void _key; return rule
 function newRule(elementType: string, parFiles: ParFile[]): UiRule {
   return withKey({
     element_type: elementType, conditions: [], model: '',
-    par_source: 'file', par_file: parFiles[0]?.name ?? '', parameter_set_id: '',
+    par_source: 'file', par_file: parFiles[0]?.name ?? '', parameter_set_id: '', fields: {},
   })
 }
 
@@ -209,12 +222,14 @@ function ConditionRow({ elementType, condition, attributes, notConnected, onChan
   )
 }
 
-// One line describing a folded rule: element type, conditions, model.
-function ruleSummary(rule: Rule, typeLabel: string): string {
+// One line describing a folded rule: element type, conditions, model and its fields.
+function ruleSummary(rule: Rule, typeLabel: string, model: Model | undefined): string {
   const conditions = rule.conditions
     .filter(c => c.attribute)
     .map(c => `${c.attribute} ${OPERATOR_LABEL[c.operator] ?? c.operator} ${Array.isArray(c.value) ? c.value.join(', ') : c.value}`)
+  const fields = (model?.fields ?? []).map(f => `${f.label.toLowerCase()} ${rule.fields?.[f.name] || f.values[0].value}`)
   return `${typeLabel}${conditions.length ? ` where ${conditions.join(' and ')}` : ''} → ${rule.model || 'no model'}`
+    + (fields.length ? ` (${fields.join(', ')})` : '')
 }
 
 // ── One rule ──────────────────────────────────────────────────────────────────
@@ -245,15 +260,17 @@ function RuleCard({ rule, index, count, report, elementTypes, attributes, notCon
       label: <span title={m.description}>{m.name} <Text type="secondary">· {m.category}{m.custom ? ' · added' : ''}</Text>
         {m.unavailable && <Text type="warning"> · {m.unavailable}</Text>}</span>,
     })
+    const automations = models.filter(m => m.automation)
     return [
-      { label: `Suggested for ${typeLabel.toLowerCase()}`, options: models.filter(m => m.suggested).map(option) },
+      { label: `Suggested for ${typeLabel.toLowerCase()}`, options: models.filter(m => m.suggested && !m.automation).map(option) },
       { label: 'Other models', options: models.filter(m => !m.suggested).map(option) },
+      ...(automations.length ? [{ label: `Automation systems on ${typeLabel.toLowerCase()}`, options: automations.map(option) }] : []),
     ]
   }, [models, typeLabel])
   const parFile = sources?.files.find(f => f.name === rule.par_file)
   const selectedModel = models.find(m => m.name === rule.model)
   const category = selectedModel?.category
-  const modelLabel = category ? `${rule.model} · ${category}` : rule.model
+  const modelLabel = category ? `${rule.model} · ${category}${selectedModel?.custom ? ' · added' : ''}` : rule.model
 
   const setCondition = (i: number, c: Condition) =>
     onChange({ ...rule, conditions: rule.conditions.map((x, j) => (j === i ? c : x)) })
@@ -270,7 +287,7 @@ function RuleCard({ rule, index, count, report, elementTypes, attributes, notCon
         )}
         {report?.errors.length ? <Tag color="red">skipped</Tag> : null}
         {!expanded && report?.warnings.length ? <Tag color="orange">{report.warnings.length} warning(s)</Tag> : null}
-        {!expanded && <Text type="secondary" ellipsis style={{ maxWidth: 640 }}>{ruleSummary(rule, typeLabel)}</Text>}
+        {!expanded && <Text type="secondary" ellipsis style={{ maxWidth: 640 }}>{ruleSummary(rule, typeLabel, selectedModel)}</Text>}
       </Space>}
       extra={<Space size={0}>
         <Tooltip title="Move up (an earlier rule gives way to a later one)">
@@ -297,11 +314,27 @@ function RuleCard({ rule, index, count, report, elementTypes, attributes, notCon
           <Select showSearch style={{ width: fitWidth(modelLabel, 20), maxWidth: '100%' }} placeholder="model"
             value={rule.model || undefined} popupMatchSelectWidth={MODEL_POPUP_WIDTH}
             options={modelOptions} optionFilterProp="value"
-            onChange={v => onChange({ ...rule, model: v })} />
+            onChange={v => onChange({ ...rule, model: v, fields: v === rule.model ? rule.fields : {} })} />
           <Tooltip title="Add a model of the selected Dynawo that is not listed">
             <Button size="small" icon={<PlusOutlined />} onClick={onAddModel}>Add a model…</Button>
           </Tooltip>
         </Space>
+        {selectedModel?.automation && (
+          <Space wrap>
+            {selectedModel.fields?.map(f => (
+              <Space key={f.name}>
+                <Text>{f.label}</Text>
+                <Select style={{ width: fitWidth(f.values.reduce((a, v) => (v.label.length > a.length ? v.label : a), ''), 12) }}
+                  value={rule.fields?.[f.name] || f.values[0].value} options={f.values}
+                  onChange={v => onChange({ ...rule, fields: { ...rule.fields, [f.name]: v } })} />
+              </Space>
+            ))}
+            <Text type="secondary">
+              One automation system per element, named {selectedModel.id_prefix}_&lt;element id&gt;
+              {selectedModel.requires ? `; it ${selectedModel.requires}` : ''}. {selectedModel.note}
+            </Text>
+          </Space>
+        )}
         {selectedModel?.description && (
           <Collapse size="small" items={[{
             key: 'info',
@@ -367,10 +400,11 @@ function RuleCard({ rule, index, count, report, elementTypes, attributes, notCon
 
 // ── Adding a model ────────────────────────────────────────────────────────────
 
-// Libraries of the selected Dynawo unknown to PowSyBl that fit the chosen category.
+// Libraries of the selected Dynawo unknown to PowSyBl that fit the chosen
+// category, equipment or automation system.
 function AddModelDialog({ open, categories, onClose, onAdded, onRemoved }: {
   open: boolean
-  categories: string[]
+  categories: { value: string; label: string }[]
   onClose: () => void
   onAdded: (lib: string) => void
   onRemoved: () => void
@@ -416,7 +450,7 @@ function AddModelDialog({ open, categories, onClose, onAdded, onRemoved }: {
         <Space wrap>
           <Text>Category</Text>
           <Select style={{ width: 260 }} placeholder="category" value={category}
-            options={categories.map(c => ({ value: c, label: c }))} onChange={chooseCategory} />
+            options={categories} onChange={chooseCategory} />
         </Space>
         {busy && !candidates && <Text type="secondary">Checking the libraries of the selected Dynawo…</Text>}
         {candidates && (candidates.length ? (
@@ -679,7 +713,8 @@ export default function DynamicAssociation() {
     }
   }
   const addingRule = addingFor !== null ? rules[addingFor] : undefined
-  const addingCategories = [...new Set((models[addingRule?.element_type ?? ''] ?? []).filter(m => m.suggested).map(m => m.category))]
+  const addingCategories = [...new Map((models[addingRule?.element_type ?? ''] ?? []).filter(m => m.suggested)
+    .map(m => [m.category, { value: m.category, label: m.automation ? `${m.category} (automation system)` : m.category }])).values()]
 
   const updateRule = (i: number, rule: UiRule) => setRules(prev => prev.map((r, j) => (j === i ? rule : r)))
   const duplicateRule = (i: number) => {
@@ -737,9 +772,9 @@ export default function DynamicAssociation() {
   )
 
   const modelCounts = useMemo(() => {
-    const counts = new Map<string, { model: string; category: string; count: number }>()
+    const counts = new Map<string, { model: string; category: string; automation: boolean; count: number }>()
     for (const a of resolution?.assignments ?? []) {
-      const entry = counts.get(a.model) ?? { model: a.model, category: a.category, count: 0 }
+      const entry = counts.get(a.model) ?? { model: a.model, category: a.category, automation: !!a.automation, count: 0 }
       entry.count += 1
       counts.set(a.model, entry)
     }
@@ -767,7 +802,7 @@ export default function DynamicAssociation() {
       <AddModelDialog open={addingFor !== null} categories={addingCategories}
         onClose={() => setAddingFor(null)}
         onAdded={lib => {
-          if (addingFor !== null && addingRule) updateRule(addingFor, { ...addingRule, model: lib })
+          if (addingFor !== null && addingRule) updateRule(addingFor, { ...addingRule, model: lib, fields: {} })
           setAddingFor(null)
           reloadModels()
         }}
@@ -837,7 +872,8 @@ export default function DynamicAssociation() {
               <Table size="small" pagination={false} rowKey="model" dataSource={modelCounts}
                 columns={[
                   { title: 'Model', dataIndex: 'model' },
-                  { title: 'Category', dataIndex: 'category' },
+                  { title: 'Category', dataIndex: 'category',
+                    render: (c: string, m) => (m.automation ? <>{c} <Tag>automation system</Tag></> : c) },
                   { title: 'Elements', dataIndex: 'count', align: 'right' },
                 ]} />
             )}
@@ -909,7 +945,8 @@ export default function DynamicAssociation() {
             <Space orientation="vertical" style={{ width: '100%' }} size={12}>
               <Alert type="success" showIcon description={<>
                 Job <Text code>{result.jobs}</Text> generated for Dynawo {result.dynawo_version}: {result.assigned} element(s)
-                with a dynamic model{result.reference_jobs ? `, settings taken from ${result.reference_jobs}` : ''}.
+                with a dynamic model{result.automation_systems ? `, ${result.automation_systems} automation system(s)` : ''}
+                {result.reference_jobs ? `, settings taken from ${result.reference_jobs}` : ''}.
                 Files added to the session: {result.files.join(', ')}.
               </>} />
               {result.to_fill.length > 0 && (
@@ -937,11 +974,12 @@ export default function DynamicAssociation() {
               {result.dropped.length > 0 && (
                 <>
                   <Alert type="warning" showIcon
-                    description={`PowSyBl left ${result.dropped.length} element(s) out of the job:`} />
-                  <Table size="small" rowKey={d => `${d.element_type}/${d.static_id}`} dataSource={result.dropped}
+                    description={`PowSyBl left ${result.dropped.length} model(s) out of the job:`} />
+                  <Table size="small" rowKey={d => d.dynamic_model_id ?? `${d.element_type}/${d.static_id}`} dataSource={result.dropped}
                     pagination={{ pageSize: 10, hideOnSinglePage: true }}
                     columns={[
-                      { title: 'Element', dataIndex: 'static_id' },
+                      { title: 'Element', dataIndex: 'static_id',
+                        render: (s: string, d) => (d.dynamic_model_id ? `${s} (automation system ${d.dynamic_model_id})` : s) },
                       { title: 'Model', dataIndex: 'model' },
                       { title: 'Rule', dataIndex: 'rule', render: (r: number) => r + 1 },
                       { title: 'Reason (PowSyBl)', dataIndex: 'reason' },

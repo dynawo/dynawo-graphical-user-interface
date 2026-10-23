@@ -12,7 +12,15 @@ import datetime
 import inspect
 
 from backend import association_par, association_rules
-from backend.association_rules import check_condition, condition_code, element_table, get_element_type
+from backend.association_rules import (
+    automation_fields,
+    automation_id,
+    check_condition,
+    condition_code,
+    element_table,
+    get_automation_system,
+    get_element_type,
+)
 
 # Export of the last generation as a standalone pypowsybl script. Element
 # tables and .par conversion reuse the app's functions; conditions are
@@ -117,6 +125,7 @@ def _mapping_function(generation: dict, network) -> str:
         "def build_mapping(network) -> dyn.ModelMapping:",
         '    """Apply the rules in order; a later rule overrides an earlier one."""',
         "    owner = {}  # (element type, id) -> (category, model, parameter set id)",
+        "    automation = {}  # dynamic model id -> (category, model, parameter set id, fields)",
         "    tables = {}",
     ]
     catalogue_category = generation.get("model_category", {})
@@ -149,8 +158,16 @@ def _mapping_function(generation: dict, network) -> str:
             f"    df = tables[{type_entry['id']!r}]",
             f"    selected = df[{' & '.join(filters)}]" if filters else "    selected = df",
             "    for static_id in selected['id']:",
-            f"        owner[({type_entry['id']!r}, static_id)] = ({category!r}, {rule['model']!r}, {set_id!r})",
         ]
+        system = get_automation_system(category)
+        if system is None:
+            lines.append(f"        owner[({type_entry['id']!r}, static_id)] = ({category!r}, {rule['model']!r}, {set_id!r})")
+        else:
+            fields, _ = automation_fields(system, rule.get("fields"))
+            prefix, suffix = automation_id(system, "\0", fields).split("\0")
+            element_fields = ", ".join(f"{f!r}: static_id" for f in system["element_fields"])
+            lines.append(f"        automation[{prefix!r} + static_id + {suffix!r}] = "
+                         f"({category!r}, {rule['model']!r}, {set_id!r}, {{{element_fields}, **{fields!r}}})")
     lines += [
         "",
         "    mapping = dyn.ModelMapping()",
@@ -160,6 +177,13 @@ def _mapping_function(generation: dict, network) -> str:
         "    for category, rows in by_category.items():",
         "        mapping.add_dynamic_model(category, pd.DataFrame(",
         "            rows, columns=['static_id', 'parameter_set_id', 'model_name']).set_index('static_id'))",
+        "    # Automation systems: one dataframe per category, indexed by their own id.",
+        "    by_category = {}",
+        "    for dynamic_id, (category, model, set_id, fields) in automation.items():",
+        "        by_category.setdefault(category, []).append(",
+        "            {'dynamic_model_id': dynamic_id, 'parameter_set_id': set_id, 'model_name': model, **fields})",
+        "    for category, rows in by_category.items():",
+        "        mapping.add_dynamic_model(category, pd.DataFrame(rows).set_index('dynamic_model_id'))",
         "    return mapping",
     ]
     return "\n".join(lines)
