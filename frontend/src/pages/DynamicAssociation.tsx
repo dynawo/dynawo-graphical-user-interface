@@ -13,7 +13,7 @@ import { useNavigate } from 'react-router-dom'
 import {
   Alert, Button, Card, Collapse, Input, InputNumber, Modal, Radio, Select, Space, Table, Tag, Tooltip, Typography,
 } from 'antd'
-import { ArrowDownOutlined, ArrowUpOutlined, CodeOutlined, CopyOutlined, DeleteOutlined, PlusOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import { ArrowDownOutlined, ArrowUpOutlined, CodeOutlined, CopyOutlined, DeleteOutlined, DownOutlined, PlusOutlined, RightOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import client from '../api/client'
 import { errorDetail, retryTransient } from '../api/errors'
 
@@ -203,9 +203,17 @@ function ConditionRow({ elementType, condition, attributes, onChange, onRemove }
   )
 }
 
+// One line describing a folded rule: element type, conditions, model.
+function ruleSummary(rule: Rule, typeLabel: string): string {
+  const conditions = rule.conditions
+    .filter(c => c.attribute)
+    .map(c => `${c.attribute} ${OPERATOR_LABEL[c.operator] ?? c.operator} ${Array.isArray(c.value) ? c.value.join(', ') : c.value}`)
+  return `${typeLabel}${conditions.length ? ` where ${conditions.join(' and ')}` : ''} → ${rule.model || 'no model'}`
+}
+
 // ── One rule ──────────────────────────────────────────────────────────────────
 
-function RuleCard({ rule, index, count, report, elementTypes, attributes, models, sources, onChange, onMove, onDuplicate, onRemove, onAddModel }: {
+function RuleCard({ rule, index, count, report, elementTypes, attributes, models, sources, onChange, onMove, onDuplicate, onRemove, onAddModel, expanded, onToggle }: {
   rule: UiRule
   index: number
   count: number
@@ -219,6 +227,8 @@ function RuleCard({ rule, index, count, report, elementTypes, attributes, models
   onDuplicate: () => void
   onRemove: () => void
   onAddModel: () => void
+  expanded: boolean
+  onToggle: () => void
 }) {
   const typeLabel = elementTypes.find(t => t.id === rule.element_type)?.label ?? rule.element_type
   const modelOptions = useMemo(() => {
@@ -242,14 +252,18 @@ function RuleCard({ rule, index, count, report, elementTypes, attributes, models
     onChange({ ...rule, conditions: rule.conditions.map((x, j) => (j === i ? c : x)) })
 
   return (
-    <Card size="small" style={{ marginBottom: 12 }}
-      title={<Space><Text strong>Rule {index + 1}</Text>
+    <Card size="small" style={{ marginBottom: 12 }} styles={{ body: expanded ? undefined : { display: 'none' } }}
+      title={<Space onClick={onToggle} style={{ cursor: 'pointer', maxWidth: '100%' }}>
+        {expanded ? <DownOutlined /> : <RightOutlined />}
+        <Text strong>Rule {index + 1}</Text>
         {report && !report.errors.length && (
           <Tag color={report.applied ? 'blue' : 'default'}>
             {report.applied} element(s){report.matched !== report.applied ? ` — ${report.matched - report.applied} taken by later rules` : ''}
           </Tag>
         )}
         {report?.errors.length ? <Tag color="red">skipped</Tag> : null}
+        {!expanded && report?.warnings.length ? <Tag color="orange">{report.warnings.length} warning(s)</Tag> : null}
+        {!expanded && <Text type="secondary" ellipsis style={{ maxWidth: 640 }}>{ruleSummary(rule, typeLabel)}</Text>}
       </Space>}
       extra={<Space size={0}>
         <Tooltip title="Move up (an earlier rule gives way to a later one)">
@@ -444,6 +458,8 @@ export default function DynamicAssociation() {
   const [generateError, setGenerateError] = useState<string | null>(null)
   const typesRequested = useRef(new Set<string>())
   const [addingFor, setAddingFor] = useState<number | null>(null)
+  // Keys of the unfolded rules.
+  const [expanded, setExpanded] = useState<Set<number>>(new Set())
 
   const loadContext = () =>
     retryTransient(() => client.get<Context>('/dynamic-association/context')).then(res => setContext(res.data))
@@ -462,7 +478,10 @@ export default function DynamicAssociation() {
         setResult(ctx.data.last_result)
         setElementTypes(types.data.element_types)
         setSources(srcs.data)
-        setRules(saved.data.rules.map(withKey))
+        const loadedRules = saved.data.rules.map(withKey)
+        setRules(loadedRules)
+        // A single rule opens; several start folded.
+        setExpanded(new Set(loadedRules.length === 1 ? [loadedRules[0]._key] : []))
         setLoaded(true)
       })
       .catch(err => setError(errorDetail(err, 'Could not load the page')))
@@ -520,11 +539,21 @@ export default function DynamicAssociation() {
   const addingCategories = [...new Set((models[addingRule?.element_type ?? ''] ?? []).filter(m => m.suggested).map(m => m.category))]
 
   const updateRule = (i: number, rule: UiRule) => setRules(prev => prev.map((r, j) => (j === i ? rule : r)))
-  const duplicateRule = (i: number) => setRules(prev => [
-    ...prev.slice(0, i + 1),
-    withKey({ ...withoutKey(prev[i]), conditions: prev[i].conditions.map(c => ({ ...c, value: Array.isArray(c.value) ? [...c.value] : c.value })) }),
-    ...prev.slice(i + 1),
-  ])
+  const duplicateRule = (i: number) => {
+    const copy = withKey({ ...withoutKey(rules[i]), conditions: rules[i].conditions.map(c => ({ ...c, value: Array.isArray(c.value) ? [...c.value] : c.value })) })
+    setRules(prev => [...prev.slice(0, i + 1), copy, ...prev.slice(i + 1)])
+    setExpanded(new Set([copy._key]))
+  }
+  const addRule = () => {
+    const rule = newRule(elementTypes[0].id, sources?.files ?? [])
+    setRules(prev => [...prev, rule])
+    setExpanded(new Set([rule._key]))
+  }
+  const toggleRule = (key: number) => setExpanded(prev => {
+    const next = new Set(prev)
+    if (!next.delete(key)) next.add(key)
+    return next
+  })
   const moveRule = (i: number, delta: number) => setRules(prev => {
     const next = [...prev]
     ;[next[i], next[i + delta]] = [next[i + delta], next[i]]
@@ -613,10 +642,12 @@ export default function DynamicAssociation() {
             onMove={delta => moveRule(i, delta)}
             onDuplicate={() => duplicateRule(i)}
             onRemove={() => setRules(prev => prev.filter((_, j) => j !== i))}
-            onAddModel={() => setAddingFor(i)} />
+            onAddModel={() => setAddingFor(i)}
+            expanded={expanded.has(rule._key)}
+            onToggle={() => toggleRule(rule._key)} />
         ))}
         <Button type="dashed" icon={<PlusOutlined />} disabled={!loaded || !elementTypes.length}
-          onClick={() => setRules(prev => [...prev, newRule(elementTypes[0].id, sources?.files ?? [])])}>
+          onClick={addRule}>
           Add rule
         </Button>
       </Card>
