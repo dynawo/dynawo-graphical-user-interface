@@ -229,6 +229,11 @@ def condition_mask(df: pd.DataFrame, condition: dict, value) -> pd.Series:
     return OPERATORS[condition["operator"]][1](df[condition["attribute"]], value).fillna(False).astype(bool)
 
 
+def _id_lookup(condition: dict) -> bool:
+    """Whether a condition selects elements by id (looked up instead of scanned)."""
+    return condition.get("attribute") == "id" and condition.get("operator") in ("=", "in")
+
+
 def condition_code(condition: dict, value, df_name: str = "df") -> str:
     """pandas code equivalent to condition_mask, for the script export."""
     template = OPERATORS[condition["operator"]][2]
@@ -336,11 +341,18 @@ holding at most MAX_LISTED_UNMATCHED ids. Automation-system assignments also
     known_categories = _known_categories()
     if tables is None:
         tables = {}
+    indexes: dict[str, pd.Index] = {}
 
     def table(type_entry: dict) -> pd.DataFrame:
         if type_entry["id"] not in tables:
             tables[type_entry["id"]] = element_table(network, type_entry)
         return tables[type_entry["id"]]
+
+    def id_positions(type_id: str, df: pd.DataFrame, ids) -> list[int]:
+        if type_id not in indexes:
+            indexes[type_id] = pd.Index(df["id"])
+        positions = indexes[type_id].get_indexer(ids if isinstance(ids, list) else [ids])
+        return sorted(set(positions[positions >= 0].tolist()))
 
     owner: dict[tuple[str, str], int] = {}
     # dynamic model id -> (rule index, element type, element id, fields)
@@ -372,16 +384,29 @@ holding at most MAX_LISTED_UNMATCHED ids. Automation-system assignments also
         if check_parameters is not None:
             report["errors"].extend(check_parameters(rule))
         df = table(type_entry)
-        mask = pd.Series(True, index=df.index)
+        checked = []
         for condition in rule.get("conditions", []):
             value, error = check_condition(df, condition)
             if error:
                 report["errors"].append(error)
             else:
-                mask &= condition_mask(df, condition, value)
+                checked.append((condition, value))
         if report["errors"]:
             continue
-        ids = df.loc[mask, "id"]
+        # Elements selected by id are looked up, the other conditions tested on them.
+        lookup = next((i for i, (condition, _) in enumerate(checked) if _id_lookup(condition)), None)
+        others = [c for i, c in enumerate(checked) if i != lookup]
+        if lookup is not None:
+            positions = id_positions(type_entry["id"], df, checked[lookup][1])
+            if not others:
+                ids = indexes[type_entry["id"]][positions]
+            else:
+                df = df[list(dict.fromkeys(["id", *(c["attribute"] for c, _ in others)]))].iloc[positions]
+        if lookup is None or others:
+            mask = pd.Series(True, index=df.index)
+            for condition, value in others:
+                mask &= condition_mask(df, condition, value)
+            ids = df.loc[mask, "id"]
         report["matched"] = len(ids)
         for static_id in ids:
             if automation is None:

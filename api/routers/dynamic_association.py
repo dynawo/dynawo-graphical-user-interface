@@ -12,6 +12,7 @@ import json
 import os
 import re
 import tempfile
+import xml.etree.ElementTree as ET
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -45,6 +46,7 @@ from backend.association_generate import (
     session_names,
     solver_type,
 )
+from backend.association_import import reconstruct
 from backend.association_par import (
     FILE,
     GENERIC_PAR_PATH,
@@ -127,6 +129,10 @@ class GenerationOptions(BaseModel):
 
 class GenerateRequest(GenerationOptions):
     rules: list[Rule]
+
+
+class ImportRequest(BaseModel):
+    dyd_file: str
 
 
 class RuleSetRequest(BaseModel):
@@ -354,6 +360,7 @@ def get_context(session: UserSession = Depends(get_session)):
         "network_file":    session.network_name if session.network is not None else None,
         "dynawo":          exe if exe and os.path.isfile(exe) else None,
         "jobs_files":      user_jobs,
+        "dyd_files":       sorted(n for n, m in session.uploaded_files_info.items() if m.get("ftype") == "dyd"),
         "default_reference_jobs": _reference_jobs(session, None),
         "generated_files": sorted(n for n in session.uploaded_files_info if _is_generated(session, n)),
         "script_available": session.association_last_generation is not None,
@@ -381,7 +388,8 @@ def get_parameter_sources(session: UserSession = Depends(get_session)):
 
 @router.post("/resolve")
 def post_resolve(req: RulesRequest, session: UserSession = Depends(get_session)):
-    """Apply the rules to the loaded network without generating."""
+    """Apply the rules to the loaded network without generating: per rule its
+    report, per element type its elements without a model, per model its count."""
     network = _network(session)
     catalogue = _session_catalogue(session)
     par_sets, generic_sets = _user_par_sets(session), _generic_sets()
@@ -396,6 +404,13 @@ def post_resolve(req: RulesRequest, session: UserSession = Depends(get_session))
         for rule, report in zip(rules, resolution["rules"]):
             if rule["model"] and model_library(rule["model"], model_category.get(rule["model"])) not in libraries:
                 report["warnings"].append(_not_available(rule["model"], version))
+    # Elements per model, in place of the assignments (one per element).
+    counts: dict[str, dict] = {}
+    for a in resolution.pop("assignments"):
+        entry = counts.setdefault(a["model"], {"model": a["model"], "category": a["category"],
+                                               "automation": bool(a.get("automation")), "count": 0})
+        entry["count"] += 1
+    resolution["models"] = sorted(counts.values(), key=lambda m: -m["count"])
     return resolution
 
 
@@ -605,6 +620,22 @@ def get_script(session: UserSession = Depends(get_session)):
         content=script, media_type="text/x-python",
         headers={"Content-Disposition": 'attachment; filename="dynamic_association.py"'},
     )
+
+
+@router.post("/import")
+def post_import(req: ImportRequest, session: UserSession = Depends(get_session)):
+    """Rules giving the models of a .dyd of the session on the loaded network,
+    with a report of what they cannot give. The rules are not stored."""
+    network = _network(session)
+    if session.uploaded_files_info.get(req.dyd_file, {}).get("ftype") != "dyd":
+        raise HTTPException(status_code=400, detail=f"'{req.dyd_file}' is not a .dyd file of the session")
+    catalogue = _session_catalogue(session)
+    try:
+        with pypowsybl_slot():
+            return reconstruct(network, session.session_manager.get_path(req.dyd_file), req.dyd_file, catalogue,
+                               _user_par_names(session), _tables(session))
+    except ET.ParseError as exc:
+        raise HTTPException(status_code=422, detail=f"Could not read '{req.dyd_file}': {exc}")
 
 
 # ── Models added by the user ──────────────────────────────────────────────────

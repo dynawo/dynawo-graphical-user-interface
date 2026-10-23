@@ -11,9 +11,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Alert, Button, Card, Collapse, Input, InputNumber, Modal, Popconfirm, Radio, Select, Space, Table, Tag, Tooltip, Typography,
+  Alert, Button, Card, Collapse, Input, InputNumber, Modal, Pagination, Popconfirm, Radio, Select, Space, Table, Tag, Tooltip, Typography,
 } from 'antd'
-import { ArrowDownOutlined, ArrowUpOutlined, CodeOutlined, CopyOutlined, DeleteOutlined, DownOutlined, FolderOpenOutlined, PlusOutlined, RightOutlined, SaveOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import { ArrowDownOutlined, ArrowUpOutlined, CodeOutlined, CopyOutlined, DeleteOutlined, DownOutlined, FolderOpenOutlined, ImportOutlined, PlusOutlined, RightOutlined, SaveOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import client from '../api/client'
 import { errorDetail, errorStatus, retryTransient } from '../api/errors'
 
@@ -64,11 +64,13 @@ interface Assignment {
 }
 // unmatched: the first ids only; unmatched_count: all of them.
 interface TypeSummary { id: string; label: string; total: number; unmatched_count: number; unmatched: string[] }
-interface Resolution { rules: RuleReport[]; assignments: Assignment[]; element_types: TypeSummary[] }
+interface ModelCount { model: string; category: string; automation: boolean; count: number }
+interface Resolution { rules: RuleReport[]; models: ModelCount[]; element_types: TypeSummary[] }
 interface Context {
   network_file: string | null
   dynawo: string | null
   jobs_files: string[]
+  dyd_files: string[]
   default_reference_jobs: string | null
   generated_files: string[]
   script_available: boolean
@@ -113,6 +115,10 @@ const SOLVERS = [
   { value: 'dynawo_SolverIDA', label: 'IDA (dynawo_SolverIDA)' },
   { value: 'dynawo_SolverSIM', label: 'SIM (dynawo_SolverSIM)' },
 ]
+
+// Rules shown per page, and values shown in a folded rule or a condition.
+const RULES_PER_PAGE = 20
+const SHOWN_VALUES = 30
 
 // Model dropdown width (px), fitting the longest model names. A number keeps
 // the dropdown virtual, unlike `false`.
@@ -183,7 +189,7 @@ function ConditionRow({ elementType, condition, attributes, notConnected, onChan
   if (condition.operator === 'in') {
     valueWidget = (
       // Proposed values are picked; free entry ("tags") only for numbers.
-      <Select mode={searched || listValues ? 'multiple' : 'tags'} style={{ minWidth: 220 }}
+      <Select mode={searched || listValues ? 'multiple' : 'tags'} style={{ minWidth: 220 }} maxTagCount={SHOWN_VALUES}
         placeholder={searched ? 'type to search values' : 'values'}
         value={Array.isArray(condition.value) ? condition.value : []}
         options={proposed.map(valueOption)} {...searchProps}
@@ -226,7 +232,9 @@ function ConditionRow({ elementType, condition, attributes, notConnected, onChan
 function ruleSummary(rule: Rule, typeLabel: string, model: Model | undefined): string {
   const conditions = rule.conditions
     .filter(c => c.attribute)
-    .map(c => `${c.attribute} ${OPERATOR_LABEL[c.operator] ?? c.operator} ${Array.isArray(c.value) ? c.value.join(', ') : c.value}`)
+    .map(c => `${c.attribute} ${OPERATOR_LABEL[c.operator] ?? c.operator} ${Array.isArray(c.value)
+      ? c.value.slice(0, 5).join(', ') + (c.value.length > 5 ? ` … (${c.value.length} values)` : '')
+      : c.value}`)
   const fields = (model?.fields ?? []).map(f => `${f.label.toLowerCase()} ${rule.fields?.[f.name] || f.values[0].value}`)
   return `${typeLabel}${conditions.length ? ` where ${conditions.join(' and ')}` : ''} → ${rule.model || 'no model'}`
     + (fields.length ? ` (${fields.join(', ')})` : '')
@@ -304,7 +312,8 @@ function RuleCard({ rule, index, count, report, elementTypes, attributes, notCon
         </Tooltip>
       </Space>}
     >
-      <Space orientation="vertical" style={{ width: '100%' }} size={10}>
+      {/* Built only when unfolded: rules can be many. */}
+      {expanded && <Space orientation="vertical" style={{ width: '100%' }} size={10}>
         <Space wrap>
           <Text>Put on</Text>
           <Select style={{ width: 240 }} value={rule.element_type}
@@ -393,7 +402,7 @@ function RuleCard({ rule, index, count, report, elementTypes, attributes, notCon
 
         {report?.errors.map((e, i) => <Alert key={`e${i}`} type="error" showIcon description={e} />)}
         {report?.warnings.map((w, i) => <Alert key={`w${i}`} type="warning" showIcon description={w} />)}
-      </Space>
+      </Space>}
     </Card>
   )
 }
@@ -606,6 +615,100 @@ function LoadRulesDialog({ open, onClose, onLoad }: {
   )
 }
 
+// ── Rules from a .dyd ─────────────────────────────────────────────────────────
+
+interface ImportReport {
+  equipment: number
+  automation_systems: number
+  left_out: { reason: string; count: number; examples: string[] }[]
+  unknown_models: string[]
+  missing_par_files: string[]
+  differences: string[]
+  difference_count: number
+}
+
+// Rebuilds rules from a .dyd of the session on the loaded network, with what they cannot give.
+function ImportDydDialog({ open, dydFiles, onClose, onImport }: {
+  open: boolean
+  dydFiles: string[]
+  onClose: () => void
+  onImport: (rules: Rule[], mode: 'replace' | 'append') => void
+}) {
+  const [file, setFile] = useState<string | undefined>(undefined)
+  const [result, setResult] = useState<{ rules: Rule[]; report: ImportReport } | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const read = (name: string) => {
+    setFile(name); setResult(null); setError(null); setBusy(true)
+    client.post<{ rules: Rule[]; report: ImportReport }>('/dynamic-association/import', { dyd_file: name })
+      .then(res => setResult(res.data))
+      .catch(err => setError(errorDetail(err, 'Could not read the .dyd')))
+      .finally(() => setBusy(false))
+  }
+  const report = result?.report
+  const examples = (ids: string[], count: number) => `${ids.join(', ')}${count > ids.length ? ' …' : ''}`
+
+  return (
+    <Modal open={open} title="Import rules from a .dyd" onCancel={onClose} width={760} destroyOnHidden
+      afterOpenChange={visible => { if (visible) { setFile(undefined); setResult(null); setError(null) } }}
+      footer={<Space>
+        <Button onClick={onClose}>Cancel</Button>
+        <Tooltip title="Add after the current rules"><Button disabled={!result?.rules.length} onClick={() => result && onImport(result.rules, 'append')}>Add</Button></Tooltip>
+        <Tooltip title="Replace the current rules"><Button type="primary" disabled={!result?.rules.length} onClick={() => result && onImport(result.rules, 'replace')}>Replace rules</Button></Tooltip>
+      </Space>}>
+      <Space orientation="vertical" style={{ width: '100%' }} size={10}>
+        <Text type="secondary">
+          Rules giving the models of the .dyd on the loaded network, with their parameter sets. Models that rules
+          cannot give are listed below.
+        </Text>
+        <Space wrap>
+          <Text>.dyd file</Text>
+          <Select style={{ width: 420 }} placeholder={dydFiles.length ? '.dyd of the session' : 'no .dyd in the session'}
+            value={file} options={dydFiles.map(f => ({ value: f, label: f }))} onChange={read} />
+        </Space>
+        {busy && <Text type="secondary">Reading the .dyd…</Text>}
+        {error && <Alert type="error" showIcon description={error} />}
+        {report && result && (<>
+          <Alert type={report.difference_count ? 'warning' : 'success'} showIcon description={<>
+            {result.rules.length} rule(s) for {report.equipment} element model(s)
+            {report.automation_systems ? ` and ${report.automation_systems} automation system(s)` : ''}.{' '}
+            {report.difference_count
+              ? `Applied to the network, they differ from the .dyd on ${report.difference_count} element(s):`
+              : 'Applied to the network, they give the same models and parameter sets as the .dyd.'}
+            {report.difference_count > 0 && (
+              <ul style={{ margin: '4px 0' }}>{report.differences.map(d => <li key={d}>{d}</li>)}</ul>
+            )}
+          </>} />
+          {report.unknown_models.length > 0 && (
+            <Alert type="warning" showIcon description={<>
+              Models unknown to PowSyBl: {report.unknown_models.join(', ')}. Their rules stay in error until they are
+              added with "Add a model…", if the selected Dynawo has them.
+            </>} />
+          )}
+          {report.missing_par_files.length > 0 && (
+            <Alert type="warning" showIcon
+              description={`Parameter files not among your session files: ${report.missing_par_files.join(', ')}. Upload them, or choose others in the rules.`} />
+          )}
+          {report.left_out.length > 0 && (
+            <div>
+              <Text>Not turned into rules:</Text>
+              <ul style={{ margin: '4px 0' }}>
+                {report.left_out.map(l => (
+                  <li key={l.reason}><Tag>{l.count}</Tag>{l.reason} <Text type="secondary">— {examples(l.examples, l.count)}</Text></li>
+                ))}
+              </ul>
+              <Text type="secondary">
+                PowSyBl writes its own connections: connections written by hand in the .dyd are not kept.
+              </Text>
+            </div>
+          )}
+        </>)}
+      </Space>
+    </Modal>
+  )
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function DynamicAssociation() {
@@ -634,6 +737,15 @@ export default function DynamicAssociation() {
   // Settings restored from saved rules: reopens their panel.
   const [settingsLoads, setSettingsLoads] = useState(0)
   const [loadingRules, setLoadingRules] = useState(false)
+  const [importing, setImporting] = useState(false)
+  // Page of the rules list (from 1).
+  const [rulePage, setRulePage] = useState(1)
+  const pageOf = (index: number) => Math.floor(index / RULES_PER_PAGE) + 1
+  // Changes not saved yet, sent at once when leaving the page.
+  const pendingRules = useRef<{ rules: Rule[] } | null>(null)
+  const pendingOptions = useRef<GenerationOptions | null>(null)
+  // Only the answer to the latest preview request is shown.
+  const resolveRequest = useRef(0)
 
   const loadContext = () =>
     retryTransient(() => client.get<Context>('/dynamic-association/context')).then(res => setContext(res.data))
@@ -682,13 +794,16 @@ export default function DynamicAssociation() {
   // Save the rules and preview them, shortly after the last change.
   useEffect(() => {
     if (!loaded) return
+    const body = { rules: rules.map(withoutKey) }
+    pendingRules.current = body
     const timer = setTimeout(() => {
-      const body = { rules: rules.map(withoutKey) }
+      pendingRules.current = null
       client.put('/dynamic-association/rules', body)
         .catch(err => setError(errorDetail(err, 'Could not save the rules')))
       if (!context?.network_file) return
+      const request = ++resolveRequest.current
       client.post<Resolution>('/dynamic-association/resolve', body)
-        .then(res => { setResolution(res.data); setError(null) })
+        .then(res => { if (request === resolveRequest.current) { setResolution(res.data); setError(null) } })
         .catch(err => setError(errorDetail(err, 'Could not preview the rules')))
     }, 400)
     return () => clearTimeout(timer)
@@ -697,12 +812,20 @@ export default function DynamicAssociation() {
   // Save the generation settings, shortly after the last change.
   useEffect(() => {
     if (!loaded) return
+    pendingOptions.current = options
     const timer = setTimeout(() => {
+      pendingOptions.current = null
       client.put('/dynamic-association/options', options)
         .catch(err => setError(errorDetail(err, 'Could not save the generation settings')))
     }, 400)
     return () => clearTimeout(timer)
   }, [options, loaded])
+
+  // Leaving the page: what is not saved yet is sent at once.
+  useEffect(() => () => {
+    if (pendingRules.current) client.put('/dynamic-association/rules', pendingRules.current).catch(() => undefined)
+    if (pendingOptions.current) client.put('/dynamic-association/options', pendingOptions.current).catch(() => undefined)
+  }, [])
 
   // After adding or removing a model, the model lists are read again.
   const reloadModels = () => {
@@ -721,22 +844,34 @@ export default function DynamicAssociation() {
     const copy = withKey({ ...withoutKey(rules[i]), conditions: rules[i].conditions.map(c => ({ ...c, value: Array.isArray(c.value) ? [...c.value] : c.value })) })
     setRules(prev => [...prev.slice(0, i + 1), copy, ...prev.slice(i + 1)])
     setExpanded(new Set([copy._key]))
+    setRulePage(pageOf(i + 1))
   }
   const addRule = () => {
     const rule = newRule(elementTypes[0].id, sources?.files ?? [])
     setRules(prev => [...prev, rule])
     setExpanded(new Set([rule._key]))
+    setRulePage(pageOf(rules.length))
+  }
+  // Rules replaced (from page 1) or added after the current ones (shown from the first added).
+  const putRules = (added: Rule[], mode: 'replace' | 'append') => {
+    const keyed = added.map(withKey)
+    setRules(prev => (mode === 'replace' ? keyed : [...prev, ...keyed]))
+    setExpanded(new Set())
+    setRulePage(mode === 'replace' ? 1 : pageOf(rules.length))
   }
   const toggleRule = (key: number) => setExpanded(prev => {
     const next = new Set(prev)
     if (!next.delete(key)) next.add(key)
     return next
   })
-  const moveRule = (i: number, delta: number) => setRules(prev => {
-    const next = [...prev]
-    ;[next[i], next[i + delta]] = [next[i + delta], next[i]]
-    return next
-  })
+  const moveRule = (i: number, delta: number) => {
+    setRules(prev => {
+      const next = [...prev]
+      ;[next[i], next[i + delta]] = [next[i + delta], next[i]]
+      return next
+    })
+    setRulePage(pageOf(i + delta))
+  }
 
   const generate = async () => {
     setGenerating(true)
@@ -771,15 +906,9 @@ export default function DynamicAssociation() {
       onChange={onChange} />
   )
 
-  const modelCounts = useMemo(() => {
-    const counts = new Map<string, { model: string; category: string; automation: boolean; count: number }>()
-    for (const a of resolution?.assignments ?? []) {
-      const entry = counts.get(a.model) ?? { model: a.model, category: a.category, automation: !!a.automation, count: 0 }
-      entry.count += 1
-      counts.set(a.model, entry)
-    }
-    return [...counts.values()].sort((a, b) => b.count - a.count)
-  }, [resolution])
+  const modelCounts = resolution?.models ?? []
+  const shownPage = Math.min(rulePage, Math.max(1, Math.ceil(rules.length / RULES_PER_PAGE)))
+  const firstShown = (shownPage - 1) * RULES_PER_PAGE
 
   const noNetwork = context !== null && !context.network_file
   const noDynawo = context !== null && !context.dynawo
@@ -812,21 +941,31 @@ export default function DynamicAssociation() {
         onClose={() => setSavingRules(false)} />
       <LoadRulesDialog open={loadingRules} onClose={() => setLoadingRules(false)}
         onLoad={(loaded, savedOptions, mode) => {
-          const keyed = loaded.map(withKey)
-          setRules(prev => (mode === 'replace' ? keyed : [...prev, ...keyed]))
+          putRules(loaded, mode)
           if (mode === 'replace' && savedOptions) {
             setOptions(prev => ({ ...prev, ...sectionSettings(savedOptions) }))
             setSettingsLoads(n => n + 1)
           }
-          setExpanded(new Set())
           setLoadingRules(false)
         }} />
+
+      <ImportDydDialog open={importing} dydFiles={context?.dyd_files ?? []} onClose={() => setImporting(false)}
+        onImport={(imported, mode) => { putRules(imported, mode); setImporting(false) }} />
 
       <Card title="Rules" style={{ marginBottom: 16 }} extra={<Space>
         <Button size="small" icon={<SaveOutlined />} disabled={!rules.length} onClick={() => setSavingRules(true)}>Save rules…</Button>
         <Button size="small" icon={<FolderOpenOutlined />} onClick={() => setLoadingRules(true)}>Load rules…</Button>
+        <Tooltip title="Rules giving the models of a .dyd of the session">
+          <Button size="small" icon={<ImportOutlined />} disabled={noNetwork}
+            onClick={() => { loadContext().catch(() => undefined); setImporting(true) }}>Import from a .dyd…</Button>
+        </Tooltip>
       </Space>}>
-        {rules.map((rule, i) => (
+        {rules.length > RULES_PER_PAGE && (
+          <Pagination size="small" style={{ marginBottom: 12 }} current={shownPage} pageSize={RULES_PER_PAGE}
+            total={rules.length} showSizeChanger={false} onChange={setRulePage}
+            showTotal={(total, [from, to]) => `rules ${from}–${to} of ${total}`} />
+        )}
+        {rules.slice(firstShown, firstShown + RULES_PER_PAGE).map((rule, j) => [rule, firstShown + j] as const).map(([rule, i]) => (
           <RuleCard key={rule._key} rule={rule} index={i} count={rules.length}
             report={resolution?.rules[i]}
             elementTypes={elementTypes}
