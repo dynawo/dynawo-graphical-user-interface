@@ -59,6 +59,7 @@ from backend.association_par import (
 )
 from backend.association_rules import (
     attribute_values,
+    connection_notes,
     describe_attributes,
     element_table,
     get_element_type,
@@ -294,7 +295,8 @@ def get_element_type_attributes(type_id: str, session: UserSession = Depends(get
     entry = _element_type(type_id)
     with pypowsybl_slot():
         df = _table(session, entry)
-    return {"element_type": type_id, "count": len(df), "attributes": describe_attributes(df)}
+    return {"element_type": type_id, "count": len(df), "attributes": describe_attributes(df),
+            "not_connected": connection_notes(df)}
 
 
 @router.get("/element-types/{type_id}/values")

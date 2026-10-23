@@ -96,6 +96,21 @@ def element_table(network, element_type: dict) -> pd.DataFrame:
     return df
 
 
+def connection_notes(df: pd.DataFrame) -> dict[str, str]:
+    """{id: why the element is not connected} for the elements of a table that
+    are not fully connected ("not connected", "not connected on side 1"…)."""
+    notes: dict[str, str] = {}
+    if "connected" in df.columns:
+        for i in df.loc[df["connected"].eq(False), "id"]:
+            notes[i] = "not connected"
+    sides = [c for c in ("connected1", "connected2") if c in df.columns]
+    if sides:
+        for _, row in df.loc[df[sides].eq(False).any(axis=1), ["id", *sides]].iterrows():
+            open_sides = [c[-1] for c in sides if not row[c]]
+            notes[row["id"]] = "not connected" if len(open_sides) == len(sides) else f"not connected on side {open_sides[0]}"
+    return notes
+
+
 def attribute_kind(series: pd.Series) -> str:
     if pd.api.types.is_bool_dtype(series):
         return BOOLEAN
@@ -265,6 +280,16 @@ holding at most MAX_LISTED_UNMATCHED ids.
         report["matched"] = len(ids)
         for static_id in ids:
             owner[(type_entry["id"], static_id)] = index
+
+    # Applied elements that are not connected: PowSyBl writes their models anyway.
+    notes = {type_id: connection_notes(df) for type_id, df in tables.items()}
+    not_connected: dict[int, list[str]] = {}
+    for (type_id, static_id), index in owner.items():
+        if static_id in notes.get(type_id, {}):
+            not_connected.setdefault(index, []).append(static_id)
+    for index, ids in not_connected.items():
+        shown = ", ".join(ids[:5]) + (" …" if len(ids) > 5 else "")
+        reports[index]["warnings"].append(f"{len(ids)} element(s) not connected: {shown}")
 
     assignments = []
     for (type_id, static_id), index in owner.items():
