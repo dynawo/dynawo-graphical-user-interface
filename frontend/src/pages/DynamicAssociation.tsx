@@ -224,7 +224,8 @@ function RuleCard({ rule, index, count, report, elementTypes, attributes, models
     ]
   }, [models, typeLabel])
   const parFile = sources?.files.find(f => f.name === rule.par_file)
-  const category = models.find(m => m.name === rule.model)?.category
+  const selectedModel = models.find(m => m.name === rule.model)
+  const category = selectedModel?.category
   const modelLabel = category ? `${rule.model} · ${category}` : rule.model
 
   const setCondition = (i: number, c: Condition) =>
@@ -267,6 +268,13 @@ function RuleCard({ rule, index, count, report, elementTypes, attributes, models
             options={modelOptions} optionFilterProp="value"
             onChange={v => onChange({ ...rule, model: v })} />
         </Space>
+        {selectedModel?.description && (
+          <Collapse size="small" items={[{
+            key: 'info',
+            label: <Text type="secondary">Model information</Text>,
+            children: <Text>{selectedModel.description}</Text>,
+          }]} />
+        )}
 
         <div>
           <Text type="secondary">
