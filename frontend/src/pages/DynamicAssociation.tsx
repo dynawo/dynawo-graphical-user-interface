@@ -122,10 +122,11 @@ function newRule(elementType: string, parFiles: ParFile[]): UiRule {
 
 // ── One condition ─────────────────────────────────────────────────────────────
 
-function ConditionRow({ elementType, condition, attributes, onChange, onRemove }: {
+function ConditionRow({ elementType, condition, attributes, notConnected, onChange, onRemove }: {
   elementType: string
   condition: Condition
   attributes: Attribute[]
+  notConnected: Record<string, string>
   onChange: (c: Condition) => void
   onRemove: () => void
 }) {
@@ -148,6 +149,11 @@ function ConditionRow({ elementType, condition, attributes, onChange, onRemove }
     ? { onSearch: search, onFocus: () => search(''), filterOption: false, notFoundContent: 'type part of a value' }
     : {}
   const proposed = searched ? found : listValues ?? []
+  // Ids of elements that are not connected are greyed out, with the reason.
+  const valueOption = (v: string) => {
+    const note = condition.attribute === 'id' ? notConnected[v] : undefined
+    return { value: v, label: note ? <Text type="secondary">{v} <Text type="warning">· {note}</Text></Text> : v }
+  }
 
   const setAttribute = (name: string) => {
     const next = attributes.find(a => a.name === name)
@@ -167,14 +173,14 @@ function ConditionRow({ elementType, condition, attributes, onChange, onRemove }
       <Select mode={searched || listValues ? 'multiple' : 'tags'} style={{ minWidth: 220 }}
         placeholder={searched ? 'type to search values' : 'values'}
         value={Array.isArray(condition.value) ? condition.value : []}
-        options={proposed.map(v => ({ value: v, label: v }))} {...searchProps}
+        options={proposed.map(valueOption)} {...searchProps}
         onChange={v => onChange({ ...condition, value: v })} />
     )
   } else if ((listValues || searched) && condition.operator !== 'matches') {
     valueWidget = (
       <Select showSearch style={{ minWidth: 220 }} placeholder={searched ? 'type to search a value' : 'value'}
         value={typeof condition.value === 'string' && condition.value ? condition.value : undefined}
-        options={proposed.map(v => ({ value: v, label: v }))} {...searchProps}
+        options={proposed.map(valueOption)} {...searchProps}
         onChange={v => onChange({ ...condition, value: v })} />
     )
   } else {
@@ -213,13 +219,14 @@ function ruleSummary(rule: Rule, typeLabel: string): string {
 
 // ── One rule ──────────────────────────────────────────────────────────────────
 
-function RuleCard({ rule, index, count, report, elementTypes, attributes, models, sources, onChange, onMove, onDuplicate, onRemove, onAddModel, expanded, onToggle }: {
+function RuleCard({ rule, index, count, report, elementTypes, attributes, notConnected, models, sources, onChange, onMove, onDuplicate, onRemove, onAddModel, expanded, onToggle }: {
   rule: UiRule
   index: number
   count: number
   report: RuleReport | undefined
   elementTypes: ElementType[]
   attributes: Attribute[]
+  notConnected: Record<string, string>
   models: Model[]
   sources: ParamSources | null
   onChange: (r: UiRule) => void
@@ -309,7 +316,7 @@ function RuleCard({ rule, index, count, report, elementTypes, attributes, models
           </Text>
           <Space orientation="vertical" style={{ width: '100%', marginTop: 6 }} size={6}>
             {rule.conditions.map((c, i) => (
-              <ConditionRow key={i} elementType={rule.element_type} condition={c} attributes={attributes}
+              <ConditionRow key={i} elementType={rule.element_type} condition={c} attributes={attributes} notConnected={notConnected}
                 onChange={nc => setCondition(i, nc)}
                 onRemove={() => onChange({ ...rule, conditions: rule.conditions.filter((_, j) => j !== i) })} />
             ))}
@@ -575,6 +582,8 @@ export default function DynamicAssociation() {
   const [rules, setRules] = useState<UiRule[]>([])
   const [loaded, setLoaded] = useState(false)
   const [attributes, setAttributes] = useState<Record<string, Attribute[]>>({})
+  // Per element type: {id: why it is not connected}.
+  const [notConnected, setNotConnected] = useState<Record<string, Record<string, string>>>({})
   const [models, setModels] = useState<Record<string, Model[]>>({})
   const [resolution, setResolution] = useState<Resolution | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -624,8 +633,11 @@ export default function DynamicAssociation() {
     for (const typeId of new Set(rules.map(r => r.element_type))) {
       if (typesRequested.current.has(typeId)) continue
       typesRequested.current.add(typeId)
-      client.get<{ attributes: Attribute[] }>(`/dynamic-association/element-types/${typeId}/attributes`)
-        .then(res => setAttributes(prev => ({ ...prev, [typeId]: res.data.attributes })))
+      client.get<{ attributes: Attribute[]; not_connected: Record<string, string> }>(`/dynamic-association/element-types/${typeId}/attributes`)
+        .then(res => {
+          setAttributes(prev => ({ ...prev, [typeId]: res.data.attributes }))
+          setNotConnected(prev => ({ ...prev, [typeId]: res.data.not_connected }))
+        })
         .catch(err => setError(errorDetail(err, `Could not read the attributes of ${typeId}`)))
       client.get<ModelsResponse>('/dynamic-association/models', { params: { element_type: typeId } })
         .then(res => setModels(prev => ({ ...prev, [typeId]: withAvailability(res.data) })))
@@ -784,6 +796,7 @@ export default function DynamicAssociation() {
             report={resolution?.rules[i]}
             elementTypes={elementTypes}
             attributes={attributes[rule.element_type] ?? []}
+            notConnected={notConnected[rule.element_type] ?? {}}
             models={models[rule.element_type] ?? []}
             sources={sources}
             onChange={r => updateRule(i, r)}
