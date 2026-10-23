@@ -10,7 +10,9 @@
     "  being the default, in_id adding a non-default value to the id; requires: equipment model",
     "  categories the element needs, per value of the field `by` ('*': any value); requires_part:",
     "  pypowsybl Network method listing the elements having the part it needs, with the part's name;",
-    "  note: shown with its models.",
+    "  note: shown with its models; reconstruct: how a .dyd connection gives it, the variable being",
+    "  the element model's, or the network's without the '<element id>_' prefix: roles (element field ->",
+    "  variable pattern) and fields (field -> [[variable pattern, value]...]).",
     "network_models: a model of one of these categories makes PowSyBl model the whole network: every",
     "  element of these types then needs a dynamic model."
   ],
@@ -83,6 +85,9 @@
           {"value": "LOW_VOLTAGE", "label": "LOW_VOLTAGE (load with two transformers)"}
         ]}
       ],
+      "reconstruct": {"fields": {"side": [
+        ["^transformer_", "NONE"], ["^transformerT_", "HIGH_VOLTAGE"], ["^transformerD_", "LOW_VOLTAGE"]
+      ]}},
       "requires": {"by": "side", "categories": {
         "NONE": ["LoadOneTransformer"],
         "HIGH_VOLTAGE": ["LoadTwoTransformers"],
@@ -119,6 +124,10 @@
       "element_fields": ["controlled_branch", "i_measurement"],
       "id_prefix": "OMS",
       "libs": {"OverloadManagementSystem": "CurrentLimitAutomaton"},
+      "reconstruct": {
+        "roles": {"controlled_branch": "^state", "i_measurement": "^iSide[12]"},
+        "fields": {"i_measurement_side": [["^iSide1", "ONE"], ["^iSide2", "TWO"]]}
+      },
       "fields": [
         {"name": "i_measurement_side", "label": "Measured side", "values": [
           {"value": "ONE", "label": "ONE"},
