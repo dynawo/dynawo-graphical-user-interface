@@ -155,6 +155,25 @@ def _session_catalogue(session: UserSession) -> list[dict]:
     return with_custom_models(_catalogue(), _custom_models(session, numeric_version(selected[1])))
 
 
+# executable -> libraries of its ddb.
+_ddb_libraries: dict[str, set[str]] = {}
+
+
+def _availability(session: UserSession) -> tuple[str, set[str]] | None:
+    """(version of the selected Dynawo, libraries of its ddb), None without one."""
+    selected = _selected_dynawo(session)
+    if selected is None:
+        return None
+    exe, version = selected
+    if exe not in _ddb_libraries:
+        _ddb_libraries[exe] = set(ddb_libraries(exe))
+    return numeric_version(version), _ddb_libraries[exe]
+
+
+def _not_available(model: str, version: str) -> str:
+    return f"model '{model}' is not available for Dynawo {version}"
+
+
 def _network(session: UserSession):
     if session.network is None:
         raise HTTPException(status_code=404, detail="No network loaded")
@@ -281,7 +300,12 @@ def get_attribute_values(type_id: str, attribute: str, search: str = "", limit: 
 def get_models(element_type: str | None = None, session: UserSession = Depends(get_session)):
     """Equipment models, those fitting `element_type` first."""
     entry = _element_type(element_type) if element_type else None
-    return {"models": models_for_element_type(entry, _session_catalogue(session))}
+    models = models_for_element_type(entry, _session_catalogue(session))
+    availability = _availability(session)
+    if availability is None:
+        return {"dynawo_version": None, "models": models}
+    version, libraries = availability
+    return {"dynawo_version": version, "models": [{**m, "available": m["name"] in libraries} for m in models]}
 
 
 @router.get("/rules")
@@ -337,9 +361,17 @@ def post_resolve(req: RulesRequest, session: UserSession = Depends(get_session))
     network = _network(session)
     catalogue = _session_catalogue(session)
     par_sets, generic_sets = _user_par_sets(session), _generic_sets()
+    rules = [r.model_dump() for r in req.rules]
     with pypowsybl_slot():
-        return resolve(network, [r.model_dump() for r in req.rules], catalogue,
-                       lambda rule: check_rule_parameters(rule, par_sets, generic_sets), _tables(session))
+        resolution = resolve(network, rules, catalogue,
+                             lambda rule: check_rule_parameters(rule, par_sets, generic_sets), _tables(session))
+    availability = _availability(session)
+    if availability is not None:
+        version, libraries = availability
+        for rule, report in zip(rules, resolution["rules"]):
+            if rule["model"] and rule["model"] not in libraries:
+                report["warnings"].append(_not_available(rule["model"], version))
+    return resolution
 
 
 def _network_or_solver_par(
