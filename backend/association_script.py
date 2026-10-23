@@ -30,6 +30,7 @@ _HEADER = '''#!/usr/bin/env python3
 # Parameter sets left empty in the GUI must be filled first.
 
 import copy
+import json
 import os
 import re
 import tempfile
@@ -47,6 +48,8 @@ MODELS_PAR = {models_par!r}
 NETWORK_PAR, NETWORK_PAR_ID = {network_par!r}, {network_id!r}
 SOLVER_TYPE, SOLVER_PAR, SOLVER_PAR_ID = {solver_type!r}, {solver_par!r}, {solver_id!r}
 START_TIME, STOP_TIME = {start!r}, {stop!r}
+# Models added in the GUI, declared to PowSyBl (powsybl-dynawo additional models file).
+ADDITIONAL_MODELS = {additional!r}
 
 _NS = {ns!r}
 _VOLTAGE_LEVEL_ID = re.compile({vl_pattern!r})
@@ -70,14 +73,19 @@ def main() -> None:
     mapping = build_mapping(network)
     report = rep.ReportNode()
     with tempfile.TemporaryDirectory() as tmp_dir:
-        parameters = dyn.Parameters(START_TIME, STOP_TIME, {
+        provider = {
             "parametersFile":         powsybl_copy(MODELS_PAR, tmp_dir),
             "network.parametersFile": powsybl_copy(NETWORK_PAR, tmp_dir),
             "network.parametersId":   NETWORK_PAR_ID,
             "solver.type":            SOLVER_TYPE,
             "solver.parametersFile":  powsybl_copy(SOLVER_PAR, tmp_dir),
             "solver.parametersId":    SOLVER_PAR_ID,
-        })
+        }
+        if ADDITIONAL_MODELS:
+            provider["additionalModelsFile"] = os.path.join(tmp_dir, "additional_models.json")
+            with open(provider["additionalModelsFile"], "w") as fh:
+                json.dump(ADDITIONAL_MODELS, fh)
+        parameters = dyn.Parameters(START_TIME, STOP_TIME, provider)
         result = dyn.Simulation().run(network, mapping, parameters=parameters, report_node=report)
     print(report)
     print("status:", result.status(), result.status_text() or "")
@@ -96,6 +104,7 @@ def build_script(generation: dict, network) -> str:
         network_par=generation["network_par"], network_id=generation["network_id"],
         solver_type=generation["solver_type"], solver_par=generation["solver_par"],
         solver_id=generation["solver_id"], start=generation["start"], stop=generation["stop"],
+        additional=generation.get("additional_models") or {},
         ns=association_par._NS, vl_pattern=association_rules._VOLTAGE_LEVEL_ID.pattern,
         vl_attributes=association_rules._VOLTAGE_LEVEL_ATTRIBUTES,
     )

@@ -92,6 +92,8 @@ class UserSession:
     association_last_result: dict | None = None
     # Element tables of the loaded network by type id: {"network": ..., "tables": {...}}.
     association_tables: dict = field(default_factory=dict)
+    # Models added by the user for this session only (shared ones: see backend/association_custom.py).
+    association_custom_models: list[dict] = field(default_factory=list)
 
     # Parameter change logs
     par_change_log: list[ChangeLogEntry] = field(default_factory=list)

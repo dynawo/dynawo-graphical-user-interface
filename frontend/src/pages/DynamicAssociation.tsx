@@ -11,7 +11,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Alert, Button, Card, Collapse, Input, InputNumber, Radio, Select, Space, Table, Tag, Tooltip, Typography,
+  Alert, Button, Card, Collapse, Input, InputNumber, Modal, Radio, Select, Space, Table, Tag, Tooltip, Typography,
 } from 'antd'
 import { ArrowDownOutlined, ArrowUpOutlined, CodeOutlined, CopyOutlined, DeleteOutlined, PlusOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import client from '../api/client'
@@ -38,7 +38,9 @@ type UiRule = Rule & { _key: number }
 
 interface ElementType { id: string; label: string }
 interface Attribute { name: string; kind: 'number' | 'boolean' | 'text'; operators: string[]; values: string[] | null }
-interface Model { name: string; description: string; category: string; suggested: boolean }
+// custom: added by the user, shared (all sessions) or live (this session).
+interface Model { name: string; description: string; category: string; suggested: boolean; custom?: 'shared' | 'live' }
+interface CustomModel { lib: string; category: string; dynawo_version: string; shared: boolean }
 interface ParFile { name: string; sets: string[] }
 interface ParamSources { files: ParFile[]; generic: { available: boolean; sets: string[] } }
 interface RuleReport { index: number; matched: number; applied: number; errors: string[]; warnings: string[] }
@@ -198,7 +200,7 @@ function ConditionRow({ elementType, condition, attributes, onChange, onRemove }
 
 // ── One rule ──────────────────────────────────────────────────────────────────
 
-function RuleCard({ rule, index, count, report, elementTypes, attributes, models, sources, onChange, onMove, onDuplicate, onRemove }: {
+function RuleCard({ rule, index, count, report, elementTypes, attributes, models, sources, onChange, onMove, onDuplicate, onRemove, onAddModel }: {
   rule: UiRule
   index: number
   count: number
@@ -211,12 +213,13 @@ function RuleCard({ rule, index, count, report, elementTypes, attributes, models
   onMove: (delta: number) => void
   onDuplicate: () => void
   onRemove: () => void
+  onAddModel: () => void
 }) {
   const typeLabel = elementTypes.find(t => t.id === rule.element_type)?.label ?? rule.element_type
   const modelOptions = useMemo(() => {
     const option = (m: Model) => ({
       value: m.name,
-      label: <span title={m.description}>{m.name} <Text type="secondary">· {m.category}</Text></span>,
+      label: <span title={m.description}>{m.name} <Text type="secondary">· {m.category}{m.custom ? ' · added' : ''}</Text></span>,
     })
     return [
       { label: `Suggested for ${typeLabel.toLowerCase()}`, options: models.filter(m => m.suggested).map(option) },
@@ -267,6 +270,9 @@ function RuleCard({ rule, index, count, report, elementTypes, attributes, models
             value={rule.model || undefined} popupMatchSelectWidth={MODEL_POPUP_WIDTH}
             options={modelOptions} optionFilterProp="value"
             onChange={v => onChange({ ...rule, model: v })} />
+          <Tooltip title="Add a model of the selected Dynawo that is not listed">
+            <Button size="small" icon={<PlusOutlined />} onClick={onAddModel}>Add a model…</Button>
+          </Tooltip>
         </Space>
         {selectedModel?.description && (
           <Collapse size="small" items={[{
@@ -331,6 +337,86 @@ function RuleCard({ rule, index, count, report, elementTypes, attributes, models
   )
 }
 
+// ── Adding a model ────────────────────────────────────────────────────────────
+
+// Libraries of the selected Dynawo unknown to PowSyBl that fit the chosen category.
+function AddModelDialog({ open, categories, onClose, onAdded, onRemoved }: {
+  open: boolean
+  categories: string[]
+  onClose: () => void
+  onAdded: (lib: string) => void
+  onRemoved: () => void
+}) {
+  const [category, setCategory] = useState<string | undefined>(undefined)
+  const [candidates, setCandidates] = useState<string[] | null>(null)
+  const [lib, setLib] = useState<string | undefined>(undefined)
+  const [shared, setShared] = useState(false)
+  const [added, setAdded] = useState<{ dynawo_version: string | null; models: CustomModel[] }>({ dynawo_version: null, models: [] })
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const loadAdded = () => client.get<{ dynawo_version: string | null; models: CustomModel[] }>('/dynamic-association/custom-models')
+    .then(res => setAdded(res.data))
+    .catch(err => setError(errorDetail(err, 'Could not read the added models')))
+  const chooseCategory = (c: string) => {
+    setCategory(c); setLib(undefined); setCandidates(null); setError(null); setBusy(true)
+    client.get<{ candidates: string[] }>('/dynamic-association/custom-models/candidates', { params: { category: c } })
+      .then(res => setCandidates(res.data.candidates))
+      .catch(err => setError(errorDetail(err, 'Could not list the libraries')))
+      .finally(() => setBusy(false))
+  }
+  const add = () => {
+    if (!category || !lib) return
+    setBusy(true); setError(null)
+    client.post('/dynamic-association/custom-models', { lib, category, shared })
+      .then(() => { onAdded(lib); setLib(undefined); setCandidates(null); setCategory(undefined) })
+      .catch(err => setError(errorDetail(err, 'Could not add the model')))
+      .finally(() => setBusy(false))
+  }
+  const remove = (m: CustomModel) => client.delete(`/dynamic-association/custom-models/${encodeURIComponent(m.lib)}`, { params: { shared: m.shared } })
+    .then(() => { loadAdded(); onRemoved() })
+    .catch(err => setError(errorDetail(err, 'Could not remove the model')))
+
+  return (
+    <Modal open={open} title="Add a model" onCancel={onClose} afterOpenChange={visible => { if (visible) loadAdded() }}
+      okText="Add" onOk={add} okButtonProps={{ disabled: !lib, loading: busy && !!lib }} width={640} destroyOnHidden>
+      <Space orientation="vertical" style={{ width: '100%' }} size={12}>
+        <Text type="secondary">
+          Libraries of the selected Dynawo{added.dynawo_version ? ` (${added.dynawo_version})` : ''} that PowSyBl does not
+          know and that fit the category. An added model is offered only with this Dynawo version.
+        </Text>
+        <Space wrap>
+          <Text>Category</Text>
+          <Select style={{ width: 260 }} placeholder="category" value={category}
+            options={categories.map(c => ({ value: c, label: c }))} onChange={chooseCategory} />
+        </Space>
+        {busy && !candidates && <Text type="secondary">Checking the libraries of the selected Dynawo…</Text>}
+        {candidates && (candidates.length ? (
+          <Space wrap>
+            <Text>Library</Text>
+            <Select showSearch style={{ width: 420 }} placeholder="library" value={lib}
+              options={candidates.map(c => ({ value: c, label: c }))} onChange={setLib} />
+          </Space>
+        ) : <Alert type="info" showIcon description="No library of the selected Dynawo can be added to this category." />)}
+        <Radio.Group value={shared} onChange={e => setShared(e.target.value)} options={[
+          { value: false, label: 'For this session' },
+          { value: true, label: 'For all sessions' },
+        ]} />
+        {error && <Alert type="error" showIcon description={error} />}
+        {added.models.length > 0 && (
+          <Table size="small" rowKey={m => `${m.lib}/${m.shared}`} dataSource={added.models} pagination={false}
+            columns={[
+              { title: 'Added model', dataIndex: 'lib' },
+              { title: 'Category', dataIndex: 'category' },
+              { title: 'Kept', dataIndex: 'shared', render: (s: boolean) => (s ? 'all sessions' : 'this session') },
+              { title: '', width: 50, render: (_, m) => <Button type="text" danger icon={<DeleteOutlined />} onClick={() => remove(m)} /> },
+            ]} />
+        )}
+      </Space>
+    </Modal>
+  )
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function DynamicAssociation() {
@@ -350,6 +436,7 @@ export default function DynamicAssociation() {
   const [result, setResult] = useState<GenerateResult | null>(null)
   const [generateError, setGenerateError] = useState<string | null>(null)
   const typesRequested = useRef(new Set<string>())
+  const [addingFor, setAddingFor] = useState<number | null>(null)
 
   const loadContext = () =>
     retryTransient(() => client.get<Context>('/dynamic-association/context')).then(res => setContext(res.data))
@@ -413,6 +500,17 @@ export default function DynamicAssociation() {
     }, 400)
     return () => clearTimeout(timer)
   }, [options, loaded])
+
+  // After adding or removing a model, the model lists are read again.
+  const reloadModels = () => {
+    for (const typeId of Object.keys(models)) {
+      client.get<{ models: Model[] }>('/dynamic-association/models', { params: { element_type: typeId } })
+        .then(res => setModels(prev => ({ ...prev, [typeId]: res.data.models })))
+        .catch(err => setError(errorDetail(err, 'Could not read the model catalogue')))
+    }
+  }
+  const addingRule = addingFor !== null ? rules[addingFor] : undefined
+  const addingCategories = [...new Set((models[addingRule?.element_type ?? ''] ?? []).filter(m => m.suggested).map(m => m.category))]
 
   const updateRule = (i: number, rule: UiRule) => setRules(prev => prev.map((r, j) => (j === i ? rule : r)))
   const duplicateRule = (i: number) => setRules(prev => [
@@ -487,6 +585,15 @@ export default function DynamicAssociation() {
           description={<>No network loaded: load an IIDM file first. <a onClick={() => navigate('/')}>Upload Files</a></>} />
       )}
 
+      <AddModelDialog open={addingFor !== null} categories={addingCategories}
+        onClose={() => setAddingFor(null)}
+        onAdded={lib => {
+          if (addingFor !== null && addingRule) updateRule(addingFor, { ...addingRule, model: lib })
+          setAddingFor(null)
+          reloadModels()
+        }}
+        onRemoved={reloadModels} />
+
       <Card title="Rules" style={{ marginBottom: 16 }}>
         {rules.map((rule, i) => (
           <RuleCard key={rule._key} rule={rule} index={i} count={rules.length}
@@ -498,7 +605,8 @@ export default function DynamicAssociation() {
             onChange={r => updateRule(i, r)}
             onMove={delta => moveRule(i, delta)}
             onDuplicate={() => duplicateRule(i)}
-            onRemove={() => setRules(prev => prev.filter((_, j) => j !== i))} />
+            onRemove={() => setRules(prev => prev.filter((_, j) => j !== i))}
+            onAddModel={() => setAddingFor(i)} />
         ))}
         <Button type="dashed" icon={<PlusOutlined />} disabled={!loaded || !elementTypes.length}
           onClick={() => setRules(prev => [...prev, newRule(elementTypes[0].id, sources?.files ?? [])])}>
