@@ -24,6 +24,7 @@ import {
 import Plotly from 'plotly.js-dist-min'
 import client from '../api/client'
 import SimOutputsModal, { type ConstraintItem, type LostEquipmentItem, type TimelineEvent } from '../components/SimOutputsModal'
+import CompatibilityCheck from '../components/CompatibilityCheck'
 
 const { Title, Text } = Typography
 
@@ -732,6 +733,8 @@ function CurvesBuilder({ runs }: CurvesProps) {
 export default function RunSimulation() {
   const [jobsFiles, setJobsFiles] = useState<string[]>([])
   const [selectedJobs, setSelectedJobs] = useState<string | null>(null)
+  // Result of the last upgrade, shown in the upgraded job's compatibility card.
+  const [upgradeNotice, setUpgradeNotice] = useState<{ jobs: string; text: string } | null>(null)
   const [exe, setExe] = useState<string | null>(null)
   const [config, setConfig] = useState<{ start_time: number; stop_time: number; output_dir: string; iidm_file?: string | null } | null>(null)
   const [iidmFiles, setIidmFiles] = useState<string[]>([])
@@ -969,6 +972,17 @@ export default function RunSimulation() {
             </Text>
           )}
         </Card>
+      )}
+
+      {selectedJobs && exe && (
+        <CompatibilityCheck key={selectedJobs} jobsFile={selectedJobs}
+          notice={upgradeNotice?.jobs === selectedJobs ? upgradeNotice.text : null}
+          onUpgraded={(jobs, text) => {
+            setUpgradeNotice({ jobs, text })
+            client.get<{ name: string; ftype: string }[]>('/files/')
+              .then(r => { setJobsFiles(r.data.filter(f => f.ftype === 'jobs').map(f => f.name)); setSelectedJobs(jobs) })
+              .catch(() => {})
+          }} />
       )}
 
       {/* Run / Cancel button */}
