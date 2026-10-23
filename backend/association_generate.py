@@ -128,8 +128,18 @@ def generate_in_worker(
 
 # ── API side ──────────────────────────────────────────────────────────────────
 
+# exe -> (mtime_ns, version): `<exe> version` is run once per executable.
+_versions: dict[str, tuple[int, str]] = {}
+
+
 def read_dynawo_version(exe: str) -> str:
     """First line of `<exe> version`, e.g. "1.7.1 (rev:v1.7-1250b93)". Raises RuntimeError."""
+    try:
+        mtime = os.stat(exe).st_mtime_ns
+    except OSError as exc:
+        raise RuntimeError(f"could not run '{exe} version': {exc}") from None
+    if exe in _versions and _versions[exe][0] == mtime:
+        return _versions[exe][1]
     try:
         out = subprocess.run([exe, "version"], capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -137,6 +147,7 @@ def read_dynawo_version(exe: str) -> str:
     lines = [l.strip() for l in out.stdout.splitlines() if l.strip()]
     if out.returncode != 0 or not lines:
         raise RuntimeError(f"'{exe} version' gave no version (exit code {out.returncode})")
+    _versions[exe] = (mtime, lines[0])
     return lines[0]
 
 

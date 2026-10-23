@@ -8,6 +8,7 @@
 # SPDX-License-Identifier: MPL-2.0
 #
 
+import json
 import os
 import re
 import tempfile
@@ -21,7 +22,19 @@ from api.concurrency import pypowsybl_slot
 from api.dependencies import get_session
 from api.routers.loadflow import pypowsybl_pool
 from api.session_store import UserSession
-from backend.association_catalogue import get_catalogue
+from backend.association_catalogue import EQUIPMENT, get_catalogue
+from backend.association_custom import (
+    UNSUPPORTED_CATEGORIES,
+    additional_models_file,
+    candidates,
+    ddb_libraries,
+    fits,
+    load_shared,
+    numeric_version,
+    probe_interfaces_in_worker,
+    save_shared,
+    with_custom_models,
+)
 from backend.association_generate import (
     ORIGIN,
     adapt_dyd,
@@ -54,6 +67,7 @@ from backend.association_rules import (
     resolve,
 )
 from backend.association_script import build_script
+from backend.desc_parser import get_lib_symbols
 from backend.jobs_parser import read_network_par, read_simulation_config, read_solver_info
 from backend.user_config import load_user_config
 
@@ -113,6 +127,32 @@ def _catalogue() -> list[dict]:
         return get_catalogue()
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Could not read the pypowsybl model catalogue: {exc}")
+
+
+def _selected_dynawo(session: UserSession) -> tuple[str, str] | None:
+    """(executable, version) of the selected Dynawo, None if none usable."""
+    exe = session.dynawo_executable or load_user_config().get("dynawo_executable", "")
+    if not exe or not os.path.isfile(exe):
+        return None
+    try:
+        return exe, read_dynawo_version(exe)
+    except RuntimeError:
+        return None
+
+
+def _custom_models(session: UserSession, version: str) -> list[dict]:
+    """Models added for this Dynawo version: shared ones, then live ones."""
+    shared = [{**m, "shared": True} for m in load_shared() if m["dynawo_version"] == version]
+    live = [{**m, "shared": False} for m in session.association_custom_models if m["dynawo_version"] == version]
+    return shared + live
+
+
+def _session_catalogue(session: UserSession) -> list[dict]:
+    """The catalogue with the models added for the selected Dynawo."""
+    selected = _selected_dynawo(session)
+    if selected is None:
+        return _catalogue()
+    return with_custom_models(_catalogue(), _custom_models(session, numeric_version(selected[1])))
 
 
 def _network(session: UserSession):
@@ -238,10 +278,10 @@ def get_attribute_values(type_id: str, attribute: str, search: str = "", limit: 
 
 
 @router.get("/models")
-def get_models(element_type: str | None = None):
+def get_models(element_type: str | None = None, session: UserSession = Depends(get_session)):
     """Equipment models, those fitting `element_type` first."""
     entry = _element_type(element_type) if element_type else None
-    return {"models": models_for_element_type(entry, _catalogue())}
+    return {"models": models_for_element_type(entry, _session_catalogue(session))}
 
 
 @router.get("/rules")
@@ -295,7 +335,7 @@ def get_parameter_sources(session: UserSession = Depends(get_session)):
 def post_resolve(req: RulesRequest, session: UserSession = Depends(get_session)):
     """Apply the rules to the loaded network without generating."""
     network = _network(session)
-    catalogue = _catalogue()
+    catalogue = _session_catalogue(session)
     par_sets, generic_sets = _user_par_sets(session), _generic_sets()
     with pypowsybl_slot():
         return resolve(network, [r.model_dump() for r in req.rules], catalogue,
@@ -358,6 +398,9 @@ def post_generate(req: GenerateRequest, session: UserSession = Depends(get_sessi
 
     rules = [r.model_dump() for r in req.rules]
     par_sets, generic_sets = _user_par_sets(session), _generic_sets()
+    custom = _custom_models(session, numeric_version(dynawo_version))
+    catalogue = with_custom_models(_catalogue(), custom)
+    additional = additional_models_file(custom)
     network_par, network_id, network_to_fill = _network_or_solver_par(
         session, req.network_par_file or ref_network_par,
         req.network_par_id or ref_network_id or "Network", "network", "Network",
@@ -378,7 +421,7 @@ def post_generate(req: GenerateRequest, session: UserSession = Depends(get_sessi
             return path
 
         with pypowsybl_slot():
-            resolution = resolve(network, rules, _catalogue(),
+            resolution = resolve(network, rules, catalogue,
                                  lambda rule: check_rule_parameters(rule, par_sets, generic_sets), _tables(session))
             if not resolution["assignments"]:
                 raise HTTPException(status_code=400, detail="The rules put a model on no element: nothing to generate")
@@ -399,6 +442,11 @@ def post_generate(req: GenerateRequest, session: UserSession = Depends(get_sessi
                 "solvers.par": {solver_id} if solver_to_fill else set(),
             }
             placeholders: dict[str, dict[str, list[str]]] = {name: {} for name in fillable}
+            extra = {}
+            if additional:
+                extra["additionalModelsFile"] = os.path.join(tmp_dir, "additional_models.json")
+                with open(extra["additionalModelsFile"], "w", encoding="utf-8") as fh:
+                    json.dump(additional, fh)
             for _ in range(_MAX_PLACEHOLDER_ROUNDS):
                 result = pypowsybl_pool().submit(
                     generate_in_worker,
@@ -410,6 +458,7 @@ def post_generate(req: GenerateRequest, session: UserSession = Depends(get_sessi
                         "solver.type":            powsybl_solver,
                         "solver.parametersFile":  powsybl_copy("solvers.par", solver_par, placeholders["solvers.par"]),
                         "solver.parametersId":    solver_id,
+                        **extra,
                     },
                     start_time, stop_time, dynawo_version,
                 ).result()
@@ -454,7 +503,7 @@ def post_generate(req: GenerateRequest, session: UserSession = Depends(get_sessi
         to_fill.append({"file": names.get("solvers.par"), "set": solver_id, "for": "solver",
                         "needed_by_powsybl": placeholders["solvers.par"].get(solver_id, [])})
     dropped = dropped_assignments(assignments, result["files"]["powsybl_dynawo.dyd"], result["report"])
-    catalogue_models = {m["name"]: c["name"] for c in _catalogue() for m in c["models"]}
+    catalogue_models = {m["name"]: c["name"] for c in catalogue for m in c["models"]}
     session.association_last_generation = {
         "rules": rules,
         # Set id of each rule in the generated models .par (None if skipped).
@@ -467,6 +516,7 @@ def post_generate(req: GenerateRequest, session: UserSession = Depends(get_sessi
         "solver_type": powsybl_solver, "solver_par": names["solvers.par"], "solver_id": solver_id,
         "start": start_time, "stop": stop_time,
         "dynawo_version": dynawo_version,
+        "additional_models": additional,
     }
     session.association_last_result = {
         "files":          written,
@@ -494,3 +544,117 @@ def get_script(session: UserSession = Depends(get_session)):
         content=script, media_type="text/x-python",
         headers={"Content-Disposition": 'attachment; filename="dynamic_association.py"'},
     )
+
+
+# ── Models added by the user ──────────────────────────────────────────────────
+
+class CustomModelRequest(BaseModel):
+    lib: str
+    category: str
+    shared: bool = False
+
+
+# (executable, version) -> category interfaces; (executable) -> ddb symbols.
+_interfaces: dict[tuple[str, str], dict] = {}
+_ddb_symbols: dict[str, dict[str, tuple[list[str], list[str]]]] = {}
+
+
+def _required_dynawo(session: UserSession) -> tuple[str, str]:
+    selected = _selected_dynawo(session)
+    if selected is None:
+        raise HTTPException(status_code=400, detail="No Dynawo selected: choose one in the Dynawo Version page first")
+    return selected
+
+
+def _symbols(exe: str) -> dict[str, tuple[list[str], list[str]]]:
+    if exe not in _ddb_symbols:
+        _ddb_symbols[exe] = {lib: get_lib_symbols(exe, lib) for lib in ddb_libraries(exe)}
+    return _ddb_symbols[exe]
+
+
+def _category_interfaces(exe: str, version: str) -> dict:
+    """What PowSyBl uses of a model of each supported category, probed once per
+    Dynawo with a built-in model of the category present in its ddb; a
+    category whose built-in model does not pass its own check is left out."""
+    if (exe, version) in _interfaces:
+        return _interfaces[(exe, version)]
+    symbols = _symbols(exe)
+    types = {c: t for t in load_element_types() for c in t["categories"]}
+    probes = []
+    for category in _catalogue():
+        if category["kind"] != EQUIPMENT or category["name"] in UNSUPPORTED_CATEGORIES or category["name"] not in types:
+            continue
+        model = next((m["name"] for m in category["models"] if m["name"] in symbols), None)
+        if model:
+            probes.append({"category": category["name"], "element_type": types[category["name"]], "model": model})
+    with pypowsybl_slot():
+        interfaces = pypowsybl_pool().submit(probe_interfaces_in_worker, version, probes).result()
+    for probe in probes:
+        interface = interfaces.get(probe["category"], {})
+        if "error" not in interface and (not interface.get("internal") or not fits(symbols[probe["model"]], interface)):
+            interfaces[probe["category"]] = {"error": "requirements of this category could not be determined"}
+    _interfaces[(exe, version)] = interfaces
+    return interfaces
+
+
+def _custom_candidates(session: UserSession, category: str) -> tuple[str, list[str]]:
+    """(Dynawo version, libraries of its ddb that can be added to `category`)."""
+    if category in UNSUPPORTED_CATEGORIES:
+        raise HTTPException(status_code=400, detail=f"Models cannot be added to the category '{category}'")
+    exe, version = _required_dynawo(session)
+    interfaces = _category_interfaces(exe, version)
+    if category not in interfaces or "error" in interfaces[category]:
+        raise HTTPException(status_code=400, detail=f"Models cannot be added to the category '{category}'")
+    known = {m["name"] for c in _session_catalogue(session) for m in c["models"]}
+    libraries = {lib: s for lib, s in _symbols(exe).items() if lib not in known}
+    return numeric_version(version), sorted(candidates(category, interfaces, libraries))
+
+
+@router.get("/custom-models")
+def get_custom_models(session: UserSession = Depends(get_session)):
+    """Models added for the selected Dynawo version, shared and live."""
+    selected = _selected_dynawo(session)
+    if selected is None:
+        return {"dynawo_version": None, "models": []}
+    version = numeric_version(selected[1])
+    return {"dynawo_version": version, "models": _custom_models(session, version)}
+
+
+@router.get("/custom-models/candidates")
+def get_custom_model_candidates(category: str, session: UserSession = Depends(get_session)):
+    """Libraries of the selected Dynawo that PowSyBl does not know and that fit `category`."""
+    version, libs = _custom_candidates(session, category)
+    return {"dynawo_version": version, "category": category, "candidates": libs}
+
+
+@router.post("/custom-models")
+def post_custom_model(req: CustomModelRequest, session: UserSession = Depends(get_session)):
+    """Add a model for the selected Dynawo version, shared or for this session only."""
+    version, libs = _custom_candidates(session, req.category)
+    if req.lib not in libs:
+        raise HTTPException(status_code=400, detail=f"'{req.lib}' cannot be added to the category '{req.category}'")
+    exe, full_version = _required_dynawo(session)
+    model = {
+        "lib": req.lib, "category": req.category,
+        "internal": _category_interfaces(exe, full_version)[req.category]["internal"],
+        "dynawo_version": version,
+        "doc": f"Added from the ddb of Dynawo {version}.",
+    }
+    if req.shared:
+        save_shared(load_shared() + [model])
+    else:
+        session.association_custom_models.append(model)
+    return {"dynawo_version": version, "models": _custom_models(session, version)}
+
+
+@router.delete("/custom-models/{lib}")
+def delete_custom_model(lib: str, shared: bool, session: UserSession = Depends(get_session)):
+    """Remove an added model of the selected Dynawo version."""
+    exe, full_version = _required_dynawo(session)
+    version = numeric_version(full_version)
+    keep = lambda m: not (m["lib"] == lib and m["dynawo_version"] == version)
+    if shared:
+        save_shared([m for m in load_shared() if keep(m)])
+    else:
+        session.association_custom_models = [m for m in session.association_custom_models if keep(m)]
+    return {"dynawo_version": version, "models": _custom_models(session, version)}
