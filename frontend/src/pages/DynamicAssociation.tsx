@@ -11,11 +11,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Alert, Button, Card, Collapse, Input, InputNumber, Modal, Radio, Select, Space, Table, Tag, Tooltip, Typography,
+  Alert, Button, Card, Collapse, Input, InputNumber, Modal, Popconfirm, Radio, Select, Space, Table, Tag, Tooltip, Typography,
 } from 'antd'
-import { ArrowDownOutlined, ArrowUpOutlined, CodeOutlined, CopyOutlined, DeleteOutlined, DownOutlined, PlusOutlined, RightOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import { ArrowDownOutlined, ArrowUpOutlined, CodeOutlined, CopyOutlined, DeleteOutlined, DownOutlined, FolderOpenOutlined, PlusOutlined, RightOutlined, SaveOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import client from '../api/client'
-import { errorDetail, retryTransient } from '../api/errors'
+import { errorDetail, errorStatus, retryTransient } from '../api/errors'
 
 const { Title, Text, Paragraph } = Typography
 
@@ -438,6 +438,133 @@ function AddModelDialog({ open, categories, onClose, onAdded, onRemoved }: {
   )
 }
 
+// ── Saved rule sets ───────────────────────────────────────────────────────────
+
+// The "Network and solver parameters, time window" settings, saved with rule sets.
+const SECTION_SETTINGS = ['network_par_file', 'network_par_id', 'solver_lib', 'solver_par_file', 'solver_par_id', 'start_time', 'stop_time'] as const
+const sectionSettings = (o: Partial<GenerationOptions>): Partial<GenerationOptions> =>
+  Object.fromEntries(SECTION_SETTINGS.filter(k => k in o).map(k => [k, o[k]]))
+
+interface RuleSet { name: string; saved: string; count: number }
+
+// Saves the current rules under a name in the app's config directory.
+function SaveRulesDialog({ open, rules, options, onClose }: {
+  open: boolean
+  rules: Rule[]
+  options: Partial<GenerationOptions>
+  onClose: () => void
+}) {
+  const [name, setName] = useState('')
+  const [sets, setSets] = useState<RuleSet[]>([])
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [done, setDone] = useState<string | null>(null)
+  // The saved set this name would replace.
+  const existing = sets.find(s => s.name === name.trim())
+
+  const save = () => {
+    setBusy(true); setError(null)
+    client.put(`/dynamic-association/rule-sets/${encodeURIComponent(name.trim())}`, { rules, options }, { params: { overwrite: !!existing } })
+      .then(() => setDone(name.trim()))
+      .catch(err => setError(errorStatus(err) === 409
+        ? `Rules named '${name.trim()}' were saved meanwhile: save again to replace them.`
+        : errorDetail(err, 'Could not save the rules')))
+      .then(() => client.get<{ rule_sets: RuleSet[] }>('/dynamic-association/rule-sets'))
+      .then(res => { if (res) setSets(res.data.rule_sets) })
+      .finally(() => setBusy(false))
+  }
+  return (
+    <Modal open={open} title="Save rules" onCancel={onClose} width={640} destroyOnHidden
+      afterOpenChange={visible => {
+        if (!visible) return
+        setDone(null); setError(null)
+        client.get<{ rule_sets: RuleSet[] }>('/dynamic-association/rule-sets')
+          .then(res => setSets(res.data.rule_sets))
+          .catch(err => setError(errorDetail(err, 'Could not list the saved rules')))
+      }}
+      footer={done ? <Button type="primary" onClick={onClose}>Close</Button> : <Space>
+        <Button onClick={onClose}>Cancel</Button>
+        <Button type="primary" danger={!!existing} loading={busy} disabled={!name.trim()} onClick={save}>
+          {existing ? 'Replace' : 'Save'}
+        </Button>
+      </Space>}>
+      {done ? <Alert type="success" showIcon description={`${rules.length} rule(s) saved as '${done}'.`} /> : (
+        <Space orientation="vertical" style={{ width: '100%' }} size={10}>
+          <Text type="secondary">
+            The rules, with the network and solver parameters and time window, are kept by the application and can be
+            loaded in any session. Pick a saved set below to update it.
+          </Text>
+          <Input placeholder="name" value={name} onChange={e => setName(e.target.value)}
+            onPressEnter={() => name.trim() && save()} />
+          {existing && (
+            <Alert type="warning" showIcon
+              description={`Replaces the saved rules '${existing.name}' (${existing.count} rule(s), saved ${existing.saved.replace('T', ' ')}).`} />
+          )}
+          {error && <Alert type="error" showIcon description={error} />}
+          {sets.length > 0 && (
+            <Table size="small" rowKey="name" dataSource={sets} pagination={{ pageSize: 6, hideOnSinglePage: true }}
+              onRow={s => ({ onClick: () => setName(s.name), style: { cursor: 'pointer' } })}
+              rowClassName={s => (s.name === name.trim() ? 'ant-table-row-selected' : '')}
+              columns={[
+                { title: 'Saved rules', dataIndex: 'name' },
+                { title: 'Saved', dataIndex: 'saved', width: 170, render: (s: string) => s.replace('T', ' ') },
+                { title: 'Rules', dataIndex: 'count', width: 70, align: 'right' },
+              ]} />
+          )}
+        </Space>
+      )}
+    </Modal>
+  )
+}
+
+// Lists the saved rule sets: load one in place of the current rules or after them, or delete it.
+function LoadRulesDialog({ open, onClose, onLoad }: {
+  open: boolean
+  onClose: () => void
+  onLoad: (rules: Rule[], options: Partial<GenerationOptions> | null, mode: 'replace' | 'append') => void
+}) {
+  const [sets, setSets] = useState<RuleSet[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const list = () => client.get<{ rule_sets: RuleSet[] }>('/dynamic-association/rule-sets')
+    .then(res => setSets(res.data.rule_sets))
+    .catch(err => setError(errorDetail(err, 'Could not list the saved rules')))
+  const load = (name: string, mode: 'replace' | 'append') =>
+    client.get<{ rules: Rule[]; options: Partial<GenerationOptions> | null }>(`/dynamic-association/rule-sets/${encodeURIComponent(name)}`)
+      .then(res => onLoad(res.data.rules, res.data.options, mode))
+      .catch(err => setError(errorDetail(err, 'Could not load the rules')))
+  const remove = (name: string) => client.delete(`/dynamic-association/rule-sets/${encodeURIComponent(name)}`)
+    .then(list)
+    .catch(err => setError(errorDetail(err, 'Could not delete the rules')))
+
+  return (
+    <Modal open={open} title="Load rules" onCancel={onClose} footer={null} width={720} destroyOnHidden
+      afterOpenChange={visible => { if (visible) { setError(null); list() } }}>
+      <Space orientation="vertical" style={{ width: '100%' }} size={10}>
+        {error && <Alert type="error" showIcon description={error} />}
+        {sets && !sets.length && <Text type="secondary">No rules saved yet.</Text>}
+        {sets && sets.length > 0 && (
+          <Table size="small" rowKey="name" dataSource={sets} pagination={{ pageSize: 10, hideOnSinglePage: true }}
+            columns={[
+              { title: 'Name', dataIndex: 'name' },
+              { title: 'Saved', dataIndex: 'saved', width: 170, render: (s: string) => s.replace('T', ' ') },
+              { title: 'Rules', dataIndex: 'count', width: 70, align: 'right' },
+              { title: '', width: 230, render: (_, s) => (
+                <Space size={4}>
+                  <Tooltip title="Replace the current rules and generation settings"><Button size="small" type="primary" onClick={() => load(s.name, 'replace')}>Load</Button></Tooltip>
+                  <Tooltip title="Add after the current rules, keeping the current generation settings"><Button size="small" onClick={() => load(s.name, 'append')}>Add</Button></Tooltip>
+                  <Popconfirm title={`Delete '${s.name}'?`} okText="Delete" okButtonProps={{ danger: true }} onConfirm={() => remove(s.name)}>
+                    <Button size="small" type="text" danger icon={<DeleteOutlined />} />
+                  </Popconfirm>
+                </Space>
+              ) },
+            ]} />
+        )}
+      </Space>
+    </Modal>
+  )
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function DynamicAssociation() {
@@ -460,6 +587,10 @@ export default function DynamicAssociation() {
   const [addingFor, setAddingFor] = useState<number | null>(null)
   // Keys of the unfolded rules.
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
+  const [savingRules, setSavingRules] = useState(false)
+  // Settings restored from saved rules: reopens their panel.
+  const [settingsLoads, setSettingsLoads] = useState(0)
+  const [loadingRules, setLoadingRules] = useState(false)
 
   const loadContext = () =>
     retryTransient(() => client.get<Context>('/dynamic-association/context')).then(res => setContext(res.data))
@@ -630,7 +761,24 @@ export default function DynamicAssociation() {
         }}
         onRemoved={reloadModels} />
 
-      <Card title="Rules" style={{ marginBottom: 16 }}>
+      <SaveRulesDialog open={savingRules} rules={rules.map(withoutKey)} options={sectionSettings(options)}
+        onClose={() => setSavingRules(false)} />
+      <LoadRulesDialog open={loadingRules} onClose={() => setLoadingRules(false)}
+        onLoad={(loaded, savedOptions, mode) => {
+          const keyed = loaded.map(withKey)
+          setRules(prev => (mode === 'replace' ? keyed : [...prev, ...keyed]))
+          if (mode === 'replace' && savedOptions) {
+            setOptions(prev => ({ ...prev, ...sectionSettings(savedOptions) }))
+            setSettingsLoads(n => n + 1)
+          }
+          setExpanded(new Set())
+          setLoadingRules(false)
+        }} />
+
+      <Card title="Rules" style={{ marginBottom: 16 }} extra={<Space>
+        <Button size="small" icon={<SaveOutlined />} disabled={!rules.length} onClick={() => setSavingRules(true)}>Save rules…</Button>
+        <Button size="small" icon={<FolderOpenOutlined />} onClick={() => setLoadingRules(true)}>Load rules…</Button>
+      </Space>}>
         {rules.map((rule, i) => (
           <RuleCard key={rule._key} rule={rule} index={i} count={rules.length}
             report={resolution?.rules[i]}
@@ -697,8 +845,8 @@ export default function DynamicAssociation() {
               onChange={v => setOption({ reference_jobs: v ?? null })} />
             <Text type="secondary">network and solver parameters, time window and outputs are taken from it</Text>
           </Space>
-          {/* Remounted after loading, to open when settings are set. */}
-          <Collapse size="small" key={loaded ? 'loaded' : 'loading'}
+          {/* Remounted when settings are loaded, to open when some are set. */}
+          <Collapse size="small" key={loaded ? `loaded-${settingsLoads}` : 'loading'}
             defaultActiveKey={hasOverrides ? ['overrides'] : []} items={[{
             key: 'overrides',
             label: 'Network and solver parameters, time window',

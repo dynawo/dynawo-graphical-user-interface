@@ -66,6 +66,14 @@ from backend.association_rules import (
     models_for_element_type,
     resolve,
 )
+from backend.association_rule_sets import (
+    delete_rule_set,
+    exists,
+    list_rule_sets,
+    load_rule_set,
+    save_rule_set,
+    valid_name,
+)
 from backend.association_script import build_script
 from backend.desc_parser import get_lib_symbols
 from backend.jobs_parser import read_network_par, read_simulation_config, read_solver_info
@@ -111,6 +119,12 @@ class GenerationOptions(BaseModel):
 
 class GenerateRequest(GenerationOptions):
     rules: list[Rule]
+
+
+class RuleSetRequest(BaseModel):
+    rules: list[Rule]
+    # Network and solver parameters, time window.
+    options: dict[str, Any] | None = None
 
 # Role of each generated .par, used to keep filled sets on regeneration.
 _PAR_ROLES = {"models.par": "models", "network.par": "network", "solvers.par": "solver"}
@@ -690,3 +704,42 @@ def delete_custom_model(lib: str, shared: bool, session: UserSession = Depends(g
     else:
         session.association_custom_models = [m for m in session.association_custom_models if keep(m)]
     return {"dynawo_version": version, "models": _custom_models(session, version)}
+
+
+# ── Saved rule sets ───────────────────────────────────────────────────────────
+
+def _rule_set_name(name: str) -> str:
+    if not valid_name(name):
+        raise HTTPException(status_code=400, detail="Name: letters, digits, spaces, '.', '-' or '_' (80 at most)")
+    return name
+
+
+@router.get("/rule-sets")
+def get_rule_sets():
+    """Rule sets saved in the app's config directory."""
+    return {"rule_sets": list_rule_sets()}
+
+
+@router.get("/rule-sets/{name}")
+def get_rule_set(name: str):
+    saved = load_rule_set(_rule_set_name(name))
+    if saved is None:
+        raise HTTPException(status_code=404, detail=f"No saved rules named '{name}'")
+    return {"name": name, **saved}
+
+
+@router.put("/rule-sets/{name}")
+def put_rule_set(name: str, req: RuleSetRequest, overwrite: bool = False):
+    """Save rules (and generation settings) under a name; an existing set is
+    replaced only with `overwrite`."""
+    if exists(_rule_set_name(name)) and not overwrite:
+        raise HTTPException(status_code=409, detail=f"Rules named '{name}' are already saved")
+    save_rule_set(name, [r.model_dump() for r in req.rules], req.options)
+    return {"rule_sets": list_rule_sets()}
+
+
+@router.delete("/rule-sets/{name}")
+def delete_rule_set_endpoint(name: str):
+    if not delete_rule_set(_rule_set_name(name)):
+        raise HTTPException(status_code=404, detail=f"No saved rules named '{name}'")
+    return {"rule_sets": list_rule_sets()}
