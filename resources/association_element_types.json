@@ -2,8 +2,22 @@
   "_comment": [
     "IIDM element types a dynamic-association rule can target.",
     "getter: pypowsybl Network method listing the elements.",
-    "categories: model categories fitting the type; they order the model list, never restrict it."
+    "categories: model categories fitting the type; they order the model list, never restrict it.",
+    "automation_systems: automation-system categories a rule can put on one element of a type.",
+    "  element_types: types it applies to; element_fields: its fields set to the element id;",
+    "  id_prefix: start of its dynamic model ids (<prefix>_<element id>), unique per category;",
+    "  libs: Dynawo library of each model, when named otherwise; fields: other fields, the first value",
+    "  being the default, in_id adding a non-default value to the id; requires: equipment model",
+    "  categories the element needs, per value of the field `by` ('*': any value); requires_part:",
+    "  pypowsybl Network method listing the elements having the part it needs, with the part's name;",
+    "  note: shown with its models.",
+    "network_models: a model of one of these categories makes PowSyBl model the whole network: every",
+    "  element of these types then needs a dynamic model."
   ],
+  "network_models": {
+    "categories": ["Line", "Transformer", "Bus", "InfiniteBus"],
+    "element_types": ["LINE", "TWO_WINDINGS_TRANSFORMER", "BUS"]
+  },
   "element_types": [
     {
       "id": "GENERATOR",
@@ -52,6 +66,65 @@
       "label": "Buses (bus-breaker view)",
       "getter": "get_bus_breaker_view_buses",
       "categories": ["Bus", "InfiniteBus"]
+    }
+  ],
+  "automation_systems": [
+    {
+      "category": "TapChanger",
+      "element_types": ["LOAD"],
+      "element_fields": ["static_id"],
+      "id_prefix": "TC",
+      "note": "It regulates the transformer modelled inside the load model; tap changers of network transformers are simulated by the network model, timed by the network parameters.",
+      "libs": {"TapChangerAutomationSystem": "TapChangerAutomaton"},
+      "fields": [
+        {"name": "side", "label": "Transformer", "in_id": true, "values": [
+          {"value": "NONE", "label": "NONE (load with one transformer)"},
+          {"value": "HIGH_VOLTAGE", "label": "HIGH_VOLTAGE (load with two transformers)"},
+          {"value": "LOW_VOLTAGE", "label": "LOW_VOLTAGE (load with two transformers)"}
+        ]}
+      ],
+      "requires": {"by": "side", "categories": {
+        "NONE": ["LoadOneTransformer"],
+        "HIGH_VOLTAGE": ["LoadTwoTransformers"],
+        "LOW_VOLTAGE": ["LoadTwoTransformers"]
+      }}
+    },
+    {
+      "category": "UnderVoltageAutomationSystem",
+      "element_types": ["GENERATOR"],
+      "element_fields": ["generator"],
+      "id_prefix": "UV",
+      "libs": {"UnderVoltage": "UnderVoltageAutomaton"},
+      "requires": {"categories": {
+        "*": ["SynchronousGenerator", "SynchronizedGenerator", "SimplifiedGenerator", "SignalNGenerator", "Wecc", "GridFormingConverter"]
+      }}
+    },
+    {
+      "category": "PhaseShifterI",
+      "element_types": ["TWO_WINDINGS_TRANSFORMER"],
+      "element_fields": ["transformer"],
+      "id_prefix": "PSI",
+      "requires_part": {"getter": "get_phase_tap_changers", "name": "phase tap changer"}
+    },
+    {
+      "category": "PhaseShifterP",
+      "element_types": ["TWO_WINDINGS_TRANSFORMER"],
+      "element_fields": ["transformer"],
+      "id_prefix": "PSP",
+      "requires_part": {"getter": "get_phase_tap_changers", "name": "phase tap changer"}
+    },
+    {
+      "category": "OverloadManagementSystem",
+      "element_types": ["LINE", "TWO_WINDINGS_TRANSFORMER"],
+      "element_fields": ["controlled_branch", "i_measurement"],
+      "id_prefix": "OMS",
+      "libs": {"OverloadManagementSystem": "CurrentLimitAutomaton"},
+      "fields": [
+        {"name": "i_measurement_side", "label": "Measured side", "values": [
+          {"value": "ONE", "label": "ONE"},
+          {"value": "TWO", "label": "TWO"}
+        ]}
+      ]
     }
   ]
 }

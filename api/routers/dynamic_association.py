@@ -62,9 +62,14 @@ from backend.association_rules import (
     connection_notes,
     describe_attributes,
     element_table,
+    automation_fields,
     get_element_type,
+    load_automation_systems,
     load_element_types,
+    model_library,
     models_for_element_type,
+    network_models_requirement,
+    required_categories,
     resolve,
 )
 from backend.association_rule_sets import (
@@ -98,6 +103,8 @@ class Rule(BaseModel):
     par_source: str = "file"
     par_file: str = ""
     parameter_set_id: str = ""
+    # Automation systems: their other fields (e.g. side), default when absent.
+    fields: dict[str, str] = {}
 
 
 class RulesRequest(BaseModel):
@@ -321,7 +328,8 @@ def get_models(element_type: str | None = None, session: UserSession = Depends(g
     if availability is None:
         return {"dynawo_version": None, "models": models}
     version, libraries = availability
-    return {"dynawo_version": version, "models": [{**m, "available": m["name"] in libraries} for m in models]}
+    return {"dynawo_version": version,
+            "models": [{**m, "available": m.get("lib", m["name"]) in libraries} for m in models]}
 
 
 @router.get("/rules")
@@ -384,8 +392,9 @@ def post_resolve(req: RulesRequest, session: UserSession = Depends(get_session))
     availability = _availability(session)
     if availability is not None:
         version, libraries = availability
+        model_category = {m["name"]: c["name"] for c in catalogue for m in c["models"]}
         for rule, report in zip(rules, resolution["rules"]):
-            if rule["model"] and rule["model"] not in libraries:
+            if rule["model"] and model_library(rule["model"], model_category.get(rule["model"])) not in libraries:
                 report["warnings"].append(_not_available(rule["model"], version))
     return resolution
 
@@ -519,7 +528,10 @@ def post_generate(req: GenerateRequest, session: UserSession = Depends(get_sessi
                     break  # missing from a user set: reported below
                 placeholders[par_name].setdefault(set_id, []).append(parameter)
     if result["error"]:
-        raise HTTPException(status_code=422, detail=f"PowSyBl could not generate the association: {result['error']}")
+        detail = f"PowSyBl could not generate the association: {result['error']}"
+        if "forbid default models" in result["error"]:
+            detail += f" ({network_models_requirement()})"
+        raise HTTPException(status_code=422, detail=detail)
     result["files"].update({"models.par": models_par, "network.par": network_par, "solvers.par": solver_par})
 
     # Replace the previous generation, never a file of the user's.
@@ -572,7 +584,8 @@ def post_generate(req: GenerateRequest, session: UserSession = Depends(get_sessi
         "reference_jobs": reference,
         "dynawo_version": dynawo_version,
         "rules":          resolution["rules"],
-        "assigned":       len(assignments) - len(dropped),
+        "assigned":       sum(not a.get("automation") for a in assignments) - sum(not d.get("automation") for d in dropped),
+        "automation_systems": sum(bool(a.get("automation")) for a in assignments) - sum(bool(d.get("automation")) for d in dropped),
         "dropped":        dropped,
         "to_fill":        to_fill,
         "report":         result["report"],
@@ -627,20 +640,40 @@ def _category_interfaces(exe: str, version: str) -> dict:
     if (exe, version) in _interfaces:
         return _interfaces[(exe, version)]
     symbols = _symbols(exe)
+    catalogue = {c["name"]: c for c in _catalogue()}
+    in_ddb = lambda category: next((m["name"] for m in catalogue[category]["models"]
+                                    if model_library(m["name"], category) in symbols), None)
     types = {c: t for t in load_element_types() for c in t["categories"]}
     probes = []
-    for category in _catalogue():
+    for category in catalogue.values():
         if category["kind"] != EQUIPMENT or category["name"] in UNSUPPORTED_CATEGORIES or category["name"] not in types:
             continue
-        model = next((m["name"] for m in category["models"] if m["name"] in symbols), None)
+        model = in_ddb(category["name"])
         if model:
             probes.append({"category": category["name"], "element_type": types[category["name"]], "model": model})
+    # Automation systems: on an element of their first type, with the equipment
+    # model they need for their default field values.
+    for automation in load_automation_systems():
+        category = automation["category"]
+        model = in_ddb(category) if category in catalogue else None
+        if not model:
+            continue
+        fields, _ = automation_fields(automation, None)
+        needed = required_categories(automation, fields)
+        equipment = next(({"category": c, "model": in_ddb(c)} for c in needed or [] if c in catalogue and in_ddb(c)), None)
+        if needed and equipment is None:
+            continue
+        probes.append({"category": category, "element_type": get_element_type(automation["element_types"][0]),
+                       "model": model, "automation": {"element_fields": automation["element_fields"],
+                                                      "fields": fields, "equipment": equipment}})
     with pypowsybl_slot():
         interfaces = pypowsybl_pool().submit(probe_interfaces_in_worker, version, probes).result()
     for probe in probes:
         interface = interfaces.get(probe["category"], {})
-        if "error" not in interface and (not interface.get("internal") or not fits(symbols[probe["model"]], interface)):
+        lib = model_library(probe["model"], probe["category"])
+        if "error" not in interface and (not interface.get("internal") or not fits(symbols[lib], interface)):
             interfaces[probe["category"]] = {"error": "requirements of this category could not be determined"}
+        interface["automation"] = "automation" in probe
     _interfaces[(exe, version)] = interfaces
     return interfaces
 
@@ -653,9 +686,12 @@ def _custom_candidates(session: UserSession, category: str) -> tuple[str, list[s
     interfaces = _category_interfaces(exe, version)
     if category not in interfaces or "error" in interfaces[category]:
         raise HTTPException(status_code=400, detail=f"Models cannot be added to the category '{category}'")
-    known = {m["name"] for c in _session_catalogue(session) for m in c["models"]}
+    known = {model_library(m["name"], c["name"]) for c in _session_catalogue(session) for m in c["models"]}
     libraries = {lib: s for lib, s in _symbols(exe).items() if lib not in known}
-    return numeric_version(version), sorted(candidates(category, interfaces, libraries))
+    # Equipment and automation-system interfaces are compared among themselves.
+    automation = interfaces[category].get("automation", False)
+    same_kind = {c: i for c, i in interfaces.items() if i.get("automation", False) == automation}
+    return numeric_version(version), sorted(candidates(category, same_kind, libraries))
 
 
 @router.get("/custom-models")
