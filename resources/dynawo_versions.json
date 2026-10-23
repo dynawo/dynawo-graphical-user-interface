@@ -1,16 +1,19 @@
 {
   "Linux": {
     "master": {
-      "url": "https://github.com/dynawo/dynawo/releases/download/nightly/Dynawo_v1.8.0.zip"
+      "url": "https://github.com/dynawo/dynawo/releases/download/nightly/Dynawo_headers_v2.0.0.zip"
+    },
+    "1.8.0": {
+      "url": "https://github.com/dynawo/dynawo/releases/download/nightly/Dynawo_headers_v1.8.0.zip"
     },
     "v1.7.1": {
-      "url": "https://github.com/dynawo/dynawo/releases/download/nightly/Dynawo_v1.7.1.zip"
+      "url": "https://github.com/dynawo/dynawo/releases/download/nightly/Dynawo_headers_v1.7.1.zip"
     },
     "v1.7.0": {
-      "url": "https://github.com/dynawo/dynawo/releases/download/nightly/Dynawo_v1.7.0.zip"
+      "url": "https://github.com/dynawo/dynawo/releases/download/nightly/Dynawo_headers_v1.7.0.zip"
     },
     "v1.6.0": {
-      "url": "https://github.com/dynawo/dynawo/releases/download/nightly/Dynawo_v1.6.0.zip"
+      "url": "https://github.com/dynawo/dynawo/releases/download/nightly/Dynawo_headers_v1.6.0.zip"
     }
   }
 }
