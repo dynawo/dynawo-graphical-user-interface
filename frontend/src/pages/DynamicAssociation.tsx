@@ -39,7 +39,12 @@ type UiRule = Rule & { _key: number }
 interface ElementType { id: string; label: string }
 interface Attribute { name: string; kind: 'number' | 'boolean' | 'text'; operators: string[]; values: string[] | null }
 // custom: added by the user, shared (all sessions) or live (this session).
-interface Model { name: string; description: string; category: string; suggested: boolean; custom?: 'shared' | 'live' }
+// unavailable: why the selected Dynawo cannot use it (not in its ddb).
+interface Model { name: string; description: string; category: string; suggested: boolean; custom?: 'shared' | 'live'; unavailable?: string }
+interface ModelsResponse { dynawo_version: string | null; models: (Model & { available?: boolean })[] }
+
+const withAvailability = (res: ModelsResponse): Model[] => res.models.map(({ available, ...m }) =>
+  available === false ? { ...m, unavailable: `not available for Dynawo ${res.dynawo_version}` } : m)
 interface CustomModel { lib: string; category: string; dynawo_version: string; shared: boolean }
 interface ParFile { name: string; sets: string[] }
 interface ParamSources { files: ParFile[]; generic: { available: boolean; sets: string[] } }
@@ -219,7 +224,9 @@ function RuleCard({ rule, index, count, report, elementTypes, attributes, models
   const modelOptions = useMemo(() => {
     const option = (m: Model) => ({
       value: m.name,
-      label: <span title={m.description}>{m.name} <Text type="secondary">· {m.category}{m.custom ? ' · added' : ''}</Text></span>,
+      disabled: !!m.unavailable,
+      label: <span title={m.description}>{m.name} <Text type="secondary">· {m.category}{m.custom ? ' · added' : ''}</Text>
+        {m.unavailable && <Text type="warning"> · {m.unavailable}</Text>}</span>,
     })
     return [
       { label: `Suggested for ${typeLabel.toLowerCase()}`, options: models.filter(m => m.suggested).map(option) },
@@ -470,8 +477,8 @@ export default function DynamicAssociation() {
       client.get<{ attributes: Attribute[] }>(`/dynamic-association/element-types/${typeId}/attributes`)
         .then(res => setAttributes(prev => ({ ...prev, [typeId]: res.data.attributes })))
         .catch(err => setError(errorDetail(err, `Could not read the attributes of ${typeId}`)))
-      client.get<{ models: Model[] }>('/dynamic-association/models', { params: { element_type: typeId } })
-        .then(res => setModels(prev => ({ ...prev, [typeId]: res.data.models })))
+      client.get<ModelsResponse>('/dynamic-association/models', { params: { element_type: typeId } })
+        .then(res => setModels(prev => ({ ...prev, [typeId]: withAvailability(res.data) })))
         .catch(err => setError(errorDetail(err, 'Could not read the model catalogue')))
     }
   }, [rules, context?.network_file])
@@ -504,8 +511,8 @@ export default function DynamicAssociation() {
   // After adding or removing a model, the model lists are read again.
   const reloadModels = () => {
     for (const typeId of Object.keys(models)) {
-      client.get<{ models: Model[] }>('/dynamic-association/models', { params: { element_type: typeId } })
-        .then(res => setModels(prev => ({ ...prev, [typeId]: res.data.models })))
+      client.get<ModelsResponse>('/dynamic-association/models', { params: { element_type: typeId } })
+        .then(res => setModels(prev => ({ ...prev, [typeId]: withAvailability(res.data) })))
         .catch(err => setError(errorDetail(err, 'Could not read the model catalogue')))
     }
   }
