@@ -115,6 +115,12 @@ def read_crv_input_file(jobs_path: str) -> str | None:
         return None
 
 
+def job_relative(jobs_file: str, ref: str) -> str:
+    """A path a jobs file gives (outputs directory, input file), relative to
+    the session root: Dynawo resolves it against the jobs file's folder."""
+    return os.path.normpath(os.path.join(os.path.dirname(jobs_file), ref))
+
+
 def find_final_state_iidm(working_dir: str, output_dir: str) -> str | None:
     """Return the absolute path to the final-state IIDM file, or None.
 

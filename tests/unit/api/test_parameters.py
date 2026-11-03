@@ -101,3 +101,37 @@ def test_restore_gives_back_the_uploaded_file(case, client, data_dir):
     assert client.get("/api/parameters/changelog").json() == []
     archive = zipfile.ZipFile(io.BytesIO(client.get("/api/files/download").content))
     assert archive.read(PAR) == (data_dir / "par" / PAR).read_bytes()  # byte for byte
+
+
+def test_parameter_can_be_given_by_a_reference_and_back(case, client):
+    load = client.get("/api/parameters/model/LOAD1").json()
+    assert "p_pu" in load["orig_names"]                       # known from the session's .par
+
+    response = client.put("/api/parameters/model/LOAD1/references",
+                          json={"to_reference": {"load_alpha": "alpha"}, "to_value": ["load_P0Pu"]})
+
+    assert response.status_code == 200
+    load = client.get("/api/parameters/model/LOAD1").json()
+    assert [(r["name"], r["origName"]) for r in load["refs"]] == [("load_alpha", "alpha")]
+    assert {p["name"]: p["value"] for p in load["pars"]}["load_P0Pu"] == ""
+    assert load["reference_suggestions"] == {"load_P0Pu": "p_pu"}
+
+
+def test_shared_parameter_cannot_become_a_reference(case, client):
+    response = client.put("/api/parameters/model/GEN2/references", json={"to_reference": {"generator_H": "h"}})
+
+    assert response.status_code == 400
+    assert client.get("/api/parameters/modified-files").json() == []
+
+
+def test_network_set_of_a_job_is_editable(case, upload, client):
+    upload("jobs/network_and_solver.jobs", "par/network_and_solver.par")
+    models = {m["dyn_id"]: m for m in client.get("/api/parameters/models").json()}
+
+    network = models["NETWORK [network_and_solver.jobs]"]
+    assert (network["kind"], network["parFile"], network["parId"]) == ("network", "network_and_solver.par", "Network")
+    assert not any(m["dyn_id"].startswith("SOLVER") for m in models.values())   # Edit Solver Params
+
+    url = "/api/parameters/model/NETWORK [network_and_solver.jobs]"
+    assert client.put(url, json={"values": {"load_Tp": "60"}}).json() == {"changed": 1}
+    assert _value(client, "NETWORK [network_and_solver.jobs]", "load_Tp") == "60"

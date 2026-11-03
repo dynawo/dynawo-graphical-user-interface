@@ -17,9 +17,10 @@ from pydantic import BaseModel
 from api.dependencies import get_session
 from api.dyd_models import get_dyd_models
 from api.session_store import UserSession
+from backend.jobs_parser import job_relative, read_network_par
 from backend.models import ChangeLogEntry, ParameterChange
-from backend.par_parser import macro_usage, parse_par
-from backend.par_writer import write_par_values
+from backend.par_parser import macro_usage, parse_par, reference_names
+from backend.par_writer import set_references, write_par_values
 
 router = APIRouter(tags=["parameters"])
 
@@ -55,6 +56,60 @@ def _get_macro_siblings(
     })
 
 
+def _editable_models(session: UserSession) -> dict[str, dict]:
+    """The .dyd models, then the network set of each jobs file, which no .dyd
+    declares (the solver set has its own page). `kind` tells them apart."""
+    models = {dyn_id: {**info, "kind": "model"} for dyn_id, info in get_dyd_models(session).items()}
+    for name, meta in session.uploaded_files_info.items():
+        path = session.session_manager.get_path(name)
+        if meta.get("ftype") != "jobs" or not os.path.isfile(path):
+            continue
+        par_file, par_id = read_network_par(path)
+        if par_file and par_id:
+            dyn_id = f"NETWORK [{name}]"
+            models[dyn_id] = {"dyn_id": dyn_id, "static_id": "", "lib": "DYNModelNetwork", "kind": "network",
+                              "parFile": job_relative(name, par_file), "parId": par_id}
+    return models
+
+
+# IIDM data of the usual initial values, by suffix of the parameter name
+# (Dynawo's naming), when no .par of the session tells otherwise.
+_CONVENTIONAL_REFERENCES = {"P0Pu": "p_pu", "Q0Pu": "q_pu", "U0Pu": "v_pu", "UPhase0": "angle_pu"}
+
+
+def _session_references(session: UserSession) -> dict[str, dict[str, int]]:
+    """{parameter name: {origName: uses}} of the references of the session's .par files."""
+    used: dict[str, dict[str, int]] = {}
+    for name, meta in session.uploaded_files_info.items():
+        path = session.session_manager.get_path(name)
+        if meta.get("ftype") != "par" or not os.path.isfile(path):
+            continue
+        try:
+            with open(path, "rb") as fh:
+                pairs = reference_names(fh.read())
+        except Exception:
+            continue
+        for par_name, orig_name in pairs:
+            counts = used.setdefault(par_name, {})
+            counts[orig_name] = counts.get(orig_name, 0) + 1
+    return used
+
+
+def _reference_suggestions(pars: list[dict], used: dict[str, dict[str, int]]) -> dict[str, str]:
+    """origName suggested for each parameter: the one the session's .par
+    files use most for that name, else the conventional one."""
+    suggestions = {}
+    for par in pars:
+        name = par["name"]
+        if name in used:
+            suggestions[name] = max(used[name].items(), key=lambda item: item[1])[0]
+        else:
+            suffix = next((s for s in _CONVENTIONAL_REFERENCES if name.endswith("_" + s)), None)
+            if suffix:
+                suggestions[name] = _CONVENTIONAL_REFERENCES[suffix]
+    return suggestions
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @router.get("/modified-files")
@@ -80,17 +135,18 @@ def get_modified_par_files(session: UserSession = Depends(get_session)):
 def list_models(session: UserSession = Depends(get_session)):
     """Every dynamic model of the .dyd, whether or not it is bound to a network
     element — models with no staticId (OmegaRef, faults, events, …) carry an
-    empty `static_id` and are editable like any other."""
+    empty `static_id` and are editable like any other — then the network and
+    the network set of each jobs file."""
     return [
         {"dyn_id": info["dyn_id"], "static_id": info["static_id"], "lib": info["lib"],
-         "parFile": info["parFile"], "parId": info["parId"]}
-        for info in get_dyd_models(session).values()
+         "parFile": info["parFile"], "parId": info["parId"], "kind": info["kind"]}
+        for info in _editable_models(session).values()
     ]
 
 
 @router.get("/model/{model_id}")
 def get_model_params(model_id: str, session: UserSession = Depends(get_session)):
-    models = get_dyd_models(session)
+    models = _editable_models(session)
     if model_id not in models:
         raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
     info = models[model_id]
@@ -104,9 +160,12 @@ def get_model_params(model_id: str, session: UserSession = Depends(get_session))
     ]
     macro_id = par_set.get("macro_id")
     macro_siblings = _get_macro_siblings(session, info, models, model_id, macro_id)
+    used = _session_references(session)
     return {
         **info, "pars": par_set["pars"], "refs": par_set["refs"],
         "siblings": siblings, "macro_id": macro_id, "macro_siblings": macro_siblings,
+        "reference_suggestions": _reference_suggestions(par_set["pars"], used),
+        "orig_names": sorted({o for counts in used.values() for o in counts} | set(_CONVENTIONAL_REFERENCES.values())),
     }
 
 
@@ -116,7 +175,7 @@ class ApplyRequest(BaseModel):
 
 @router.put("/model/{model_id}")
 def apply_model_params(model_id: str, req: ApplyRequest, session: UserSession = Depends(get_session)):
-    models = get_dyd_models(session)
+    models = _editable_models(session)
     if model_id not in models:
         raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
     info = models[model_id]
@@ -142,6 +201,43 @@ def apply_model_params(model_id: str, req: ApplyRequest, session: UserSession = 
             changes=diffs,
         ))
     return {"changed": len(diffs)}
+
+
+class ReferencesRequest(BaseModel):
+    # Parameter name -> origName of the IIDM reference replacing its value.
+    to_reference: dict[str, str] = {}
+    # References turned back into parameters to fill.
+    to_value: list[str] = []
+
+
+@router.put("/model/{model_id}/references")
+def apply_model_references(model_id: str, req: ReferencesRequest, session: UserSession = Depends(get_session)):
+    """Give parameters of the model's set by IIDM references, or back by values.
+    Only the set's own entries: a macro's are shared with other sets."""
+    models = _editable_models(session)
+    if model_id not in models:
+        raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
+    info = models[model_id]
+    par_path = session.session_manager.get_path(info["parFile"])
+    if not os.path.isfile(par_path):
+        raise HTTPException(status_code=404, detail=f"Par file {info['parFile']} not found")
+    par_set = _get_par_set(session, info["parFile"], info["parId"])
+    pars = {p["name"]: p for p in par_set["pars"]}
+    refs = {r["name"]: r for r in par_set["refs"]}
+    for name, orig_name in req.to_reference.items():
+        if name not in pars or pars[name]["shared"]:
+            raise HTTPException(status_code=400, detail=f"'{name}' is not a parameter of set {info['parId']} itself")
+        if not orig_name.strip():
+            raise HTTPException(status_code=400, detail=f"No IIDM data given for '{name}'")
+    for name in req.to_value:
+        if name not in refs or refs[name]["shared"]:
+            raise HTTPException(status_code=400, detail=f"'{name}' is not a reference of set {info['parId']} itself")
+    set_references(
+        par_path, info["parId"],
+        {name: (orig_name.strip(), pars[name]["type"] or "DOUBLE") for name, orig_name in req.to_reference.items()},
+        {name: refs[name]["type"] or "DOUBLE" for name in req.to_value},
+    )
+    return {"references": len(req.to_reference), "values": len(req.to_value)}
 
 
 @router.post("/restore/{par_file:path}")

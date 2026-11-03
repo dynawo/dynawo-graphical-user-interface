@@ -26,6 +26,7 @@ from api.session_store import UserSession
 from backend.curves_loader import load_curves_csv, read_crv_info
 from backend.jobs_parser import (
     find_final_state_iidm,
+    job_relative,
     read_crv_input_file,
     read_final_state_info,
     read_log_filename,
@@ -75,6 +76,11 @@ def _next_run_id(session: UserSession) -> int:
     run_id = session.next_run_id
     session.next_run_id += 1
     return run_id
+
+
+def _run_output_path(session: UserSession, run: RunRecord) -> str:
+    """Absolute outputs folder of a run, next to its jobs file."""
+    return os.path.join(session.session_manager.working_dir, job_relative(run.jobs_file, run.output_dir))
 
 
 def _run_log_filename(session: UserSession, run: RunRecord) -> str:
@@ -261,7 +267,6 @@ async def stream_output(run_id: int, session: UserSession = Depends(get_session)
 
 @router.get("/runs")
 def list_runs(session: UserSession = Depends(get_session)):
-    working_dir = session.session_manager.working_dir
     return [
         {
             "run_id":               r.run_id,
@@ -275,13 +280,11 @@ def list_runs(session: UserSession = Depends(get_session)):
             "finished_at":          r.finished_at,
             "has_output":           bool(r.output),
             "exports_final_iidm":   r.exports_final_iidm,
-            "has_final_state_iidm": find_final_state_iidm(working_dir, r.output_dir) is not None,
-            "has_timeline":         find_timeline_xml(os.path.join(working_dir, r.output_dir)) is not None,
-            "has_constraints":      find_constraints_xml(os.path.join(working_dir, r.output_dir)) is not None,
-            "has_log":              find_dynawo_log(
-                                        os.path.join(working_dir, r.output_dir), _run_log_filename(session, r),
-                                    ) is not None,
-            "has_lost_equipments":  find_lost_equipments_xml(os.path.join(working_dir, r.output_dir)) is not None,
+            "has_final_state_iidm": find_final_state_iidm(_run_output_path(session, r), "") is not None,
+            "has_timeline":         find_timeline_xml(_run_output_path(session, r)) is not None,
+            "has_constraints":      find_constraints_xml(_run_output_path(session, r)) is not None,
+            "has_log":              find_dynawo_log(_run_output_path(session, r), _run_log_filename(session, r)) is not None,
+            "has_lost_equipments":  find_lost_equipments_xml(_run_output_path(session, r)) is not None,
         }
         for r in reversed(session.sim_runs)
     ]
@@ -303,8 +306,7 @@ def rename_run(run_id: int, req: LabelRequest, session: UserSession = Depends(ge
 @router.delete("/{run_id}")
 def delete_run(run_id: int, session: UserSession = Depends(get_session)):
     run = _get_run(session, run_id)
-    working_dir = session.session_manager.working_dir
-    out_path = os.path.join(working_dir, run.output_dir)
+    out_path = _run_output_path(session, run)
     if os.path.isdir(out_path):
         shutil.rmtree(out_path)
     session.sim_runs = [r for r in session.sim_runs if r.run_id != run_id]
@@ -344,7 +346,7 @@ def get_curves_info(run_id: int, session: UserSession = Depends(get_session)):
     crv_file = read_crv_input_file(jobs_path)
     if not crv_file:
         return {}
-    crv_path = session.session_manager.get_path(crv_file)
+    crv_path = session.session_manager.get_path(job_relative(run.jobs_file, crv_file))
     info = read_crv_info(crv_path)
     return {col: list(pair) for col, pair in info.items()}
 
@@ -352,8 +354,7 @@ def get_curves_info(run_id: int, session: UserSession = Depends(get_session)):
 @router.get("/{run_id}/curves/data")
 def get_curves_data(run_id: int, session: UserSession = Depends(get_session)):
     run = _get_run(session, run_id)
-    working_dir = session.session_manager.working_dir
-    df = load_curves_csv(os.path.join(working_dir, run.output_dir))
+    df = load_curves_csv(_run_output_path(session, run))
     if df is None:
         raise HTTPException(status_code=404, detail="No curves CSV found for this run")
 
@@ -383,7 +384,7 @@ def get_curves_data(run_id: int, session: UserSession = Depends(get_session)):
 @router.get("/{run_id}/timeline")
 def get_run_timeline(run_id: int, session: UserSession = Depends(get_session)):
     run = _get_run(session, run_id)
-    output_dir = os.path.join(session.session_manager.working_dir, run.output_dir)
+    output_dir = _run_output_path(session, run)
     path = find_timeline_xml(output_dir)
     if path is None:
         raise HTTPException(status_code=404, detail="No timeline found for this run")
@@ -394,7 +395,7 @@ def get_run_timeline(run_id: int, session: UserSession = Depends(get_session)):
 @router.get("/{run_id}/constraints")
 def get_run_constraints(run_id: int, session: UserSession = Depends(get_session)):
     run = _get_run(session, run_id)
-    output_dir = os.path.join(session.session_manager.working_dir, run.output_dir)
+    output_dir = _run_output_path(session, run)
     path = find_constraints_xml(output_dir)
     if path is None:
         raise HTTPException(status_code=404, detail="No constraints found for this run")
@@ -405,7 +406,7 @@ def get_run_constraints(run_id: int, session: UserSession = Depends(get_session)
 @router.get("/{run_id}/log")
 def get_run_log(run_id: int, session: UserSession = Depends(get_session)):
     run = _get_run(session, run_id)
-    output_dir = os.path.join(session.session_manager.working_dir, run.output_dir)
+    output_dir = _run_output_path(session, run)
     path = find_dynawo_log(output_dir, _run_log_filename(session, run))
     if path is None:
         raise HTTPException(status_code=404, detail="No log file found for this run")
@@ -416,7 +417,7 @@ def get_run_log(run_id: int, session: UserSession = Depends(get_session)):
 @router.get("/{run_id}/lost-equipments")
 def get_run_lost_equipments(run_id: int, session: UserSession = Depends(get_session)):
     run = _get_run(session, run_id)
-    output_dir = os.path.join(session.session_manager.working_dir, run.output_dir)
+    output_dir = _run_output_path(session, run)
     path = find_lost_equipments_xml(output_dir)
     if path is None:
         raise HTTPException(status_code=404, detail="No lost equipment found for this run")

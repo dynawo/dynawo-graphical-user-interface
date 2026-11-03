@@ -1095,7 +1095,8 @@ export default function DynamicAssociation() {
                     {result.to_fill.map(f => (
                       <li key={`${f.file}/${f.set}`}>
                         <Text code>{f.set}</Text> in {f.file} ({f.for}) — {' '}
-                        <a onClick={() => navigate(f.for === 'solver' ? '/edit-solver-parameters' : '/edit-parameters')}>
+                        <a onClick={() => navigate(f.for === 'solver'
+                          ? `/edit-solver-parameters?jobs=${encodeURIComponent(result.jobs)}` : '/edit-parameters')}>
                           {f.for === 'solver' ? 'Edit Solver Params' : 'Edit Parameters'}
                         </a>
                         {f.needed_by_powsybl.length > 0 && (<>

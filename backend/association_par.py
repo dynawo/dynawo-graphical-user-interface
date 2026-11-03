@@ -15,7 +15,8 @@ import xml.etree.ElementTree as ET
 # Parameter sets of a dynamic association. A rule's set comes from:
 #   FILE    a set of a session .par file
 #   GENERIC the model's set in the generic .par of resources/
-#   MANUAL  an empty set, filled by the user
+#   MANUAL  a set filled by the user, created with the parameters the model
+#           needs (from its desc) without value
 # PowSyBl takes a single models .par, built by assemble_par.
 
 FILE = "file"
@@ -110,8 +111,9 @@ def for_powsybl(content: bytes, placeholders: dict[str, list[str]] | None = None
     """Copy of a .par readable by PowSyBl.
 
     PowSyBl accepts only <par> and <reference>: macros are expanded into the
-    sets, <refPar> and <parTable> are dropped. `placeholders` ({set id: names})
-    adds these parameters with the value 1.
+    sets, <refPar> and <parTable> are dropped, as are the parameters still
+    without value. `placeholders` ({set id: names}) adds these parameters
+    with the value 1.
     """
     root = ET.fromstring(content)
     macros = {m.get("id"): m for m in root.findall(f"{{{_NS}}}macroParameterSet")}
@@ -122,7 +124,7 @@ def for_powsybl(content: bytes, placeholders: dict[str, list[str]] | None = None
         macro_ref = s.find(f"{{{_NS}}}macroParSet")
         own = {c.get("name") for c in s if c.tag in kept}
         for child in list(s):
-            if child.tag not in kept:
+            if child.tag not in kept or (child.tag == kept[0] and not child.get("value")):
                 s.remove(child)
         macro = macros.get(macro_ref.get("id")) if macro_ref is not None else None
         if macro is not None:
@@ -163,14 +165,24 @@ class _Assembler:
         self.root.append(new)
         return new.get("id")
 
-    def empty_set(self, wanted_id: str) -> str:
+    def empty_set(self, wanted_id: str, parameters: list[tuple[str, str]] = ()) -> str:
+        """A new set holding `parameters` ([(name, type)]) without value."""
         new_id = _unique(wanted_id, self._set_ids)
-        ET.SubElement(self.root, f"{{{_NS}}}set", {"id": new_id})
+        new = ET.SubElement(self.root, f"{{{_NS}}}set", {"id": new_id})
+        for name, value_type in parameters:
+            ET.SubElement(new, f"{{{_NS}}}par", {"type": value_type, "name": name, "value": ""})
         return new_id
 
-    def is_empty(self, set_id: str) -> bool:
+    def to_fill(self, set_id: str) -> bool:
+        """Whether a set is empty or has parameters without value."""
         s = next(s for s in self.root.findall(f"{{{_NS}}}set") if s.get("id") == set_id)
-        return len(s) == 0
+        return len(s) == 0 or any(not p.get("value") for p in s.findall(f"{{{_NS}}}par"))
+
+    def fill_empty(self, set_id: str, parameters: list[tuple[str, str]]) -> None:
+        s = next(s for s in self.root.findall(f"{{{_NS}}}set") if s.get("id") == set_id)
+        if len(s) == 0:
+            for name, value_type in parameters:
+                ET.SubElement(s, f"{{{_NS}}}par", {"type": value_type, "name": name, "value": ""})
 
     def _copy_macro(self, source_label: str, source_root: ET.Element, macro_id: str) -> str:
         key = (source_label, macro_id)
@@ -194,12 +206,14 @@ class _Assembler:
 
 def assemble_par(
     specs: list[tuple[str, str, str]], par_files: dict[str, bytes], generic: bytes | None,
-    previous: bytes | None = None,
+    previous: bytes | None = None, parameters: dict[str, list[tuple[str, str]]] | None = None,
 ) -> tuple[bytes, dict[tuple[str, str, str], str], list[str]]:
     """Single .par holding the set of each spec, each copied once.
 
-    A manual set present in `previous` (the file being replaced) is kept.
-    Returns (content, spec -> set id, ids of the sets left empty).
+    A manual set present in `previous` (the file being replaced) is kept; a
+    new one, or a kept one still empty, gets the parameters `parameters`
+    gives for its id ([(name, type)]), without value.
+    Returns (content, spec -> set id, ids of the sets left to fill).
     """
     assembler = _Assembler()
     parsed: dict[str, ET.Element] = {}
@@ -221,9 +235,10 @@ def assemble_par(
             ids[spec] = assembler.copy_set("generic", root_of("generic", generic), set_id, set_id)
         elif set_id in previous_ids:
             ids[spec] = assembler.copy_set("previous", root_of("previous", previous), set_id, set_id)
-            if assembler.is_empty(ids[spec]):
+            assembler.fill_empty(ids[spec], (parameters or {}).get(set_id, []))
+            if assembler.to_fill(ids[spec]):
                 to_fill.append(ids[spec])
         else:
-            ids[spec] = assembler.empty_set(set_id)
+            ids[spec] = assembler.empty_set(set_id, (parameters or {}).get(set_id, []))
             to_fill.append(ids[spec])
     return assembler.to_bytes(), ids, to_fill

@@ -9,7 +9,7 @@
 #
 
 from backend.par_parser import parse_par
-from backend.par_writer import relocate_table_files, write_par_values
+from backend.par_writer import relocate_table_files, set_references, write_par_values
 
 FIXTURE = "par/macro_and_sets.par"
 
@@ -110,3 +110,16 @@ def test_par_without_table_files_is_not_rewritten(copy_data, tmp_path):
 
     assert relocate_table_files(str(par), str(tmp_path / "run")) == []
     assert par.read_bytes() == before
+
+
+def test_par_becomes_an_iidm_reference_and_back(copy_data):
+    par = copy_data(FIXTURE)
+
+    set_references(str(par), "LOAD1", {"load_alpha": ("alpha", "DOUBLE")}, {"load_P0Pu": "DOUBLE"})
+
+    load = parse_par(par.read_bytes())["LOAD1"]
+    assert {r["name"]: r["origName"] for r in load["refs"]} == {"load_alpha": "alpha"}
+    pars = {p["name"]: p for p in load["pars"]}
+    assert "load_alpha" not in pars
+    assert pars["load_P0Pu"] == {"name": "load_P0Pu", "type": "DOUBLE", "value": "", "shared": False}
+    assert _value(par, "GEN1", "generator_SNom") == "2000"   # other sets untouched

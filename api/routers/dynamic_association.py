@@ -84,7 +84,7 @@ from backend.association_rule_sets import (
     valid_name,
 )
 from backend.association_script import build_export
-from backend.desc_parser import get_lib_symbols
+from backend.desc_parser import get_lib_parameters_to_set, get_lib_symbols
 from backend.jobs_parser import read_network_par, read_simulation_config, read_solver_info
 from backend.user_config import load_user_config
 
@@ -275,6 +275,20 @@ def _previous_generated_par(session: UserSession, role: str) -> bytes | None:
     return _read(session, name) if name else None
 
 
+def _manual_parameters(exe: str, rules: list[dict], catalogue: list[dict]) -> dict[str, list[tuple[str, str]]]:
+    """Parameters each manual set is created with: those the models of its
+    rules need, from their desc."""
+    category_of = {m["name"]: c["name"] for c in catalogue for m in c["models"]}
+    parameters: dict[str, dict[str, str]] = {}
+    for rule in rules:
+        source, _, set_id = spec_key(rule)
+        if source == MANUAL:
+            lib = model_library(rule["model"], category_of.get(rule["model"]))
+            for name, value_type in get_lib_parameters_to_set(exe, lib):
+                parameters.setdefault(set_id, {}).setdefault(name, value_type)
+    return {set_id: list(names.items()) for set_id, names in parameters.items()}
+
+
 def _reference_jobs(session: UserSession, requested: str | None) -> str | None:
     """Reference .jobs: the requested one, else the session's only user .jobs."""
     if requested:
@@ -416,10 +430,11 @@ def post_resolve(req: RulesRequest, session: UserSession = Depends(get_session))
 
 
 def _network_or_solver_par(
-    session: UserSession, par_file: str | None, set_id: str, role: str, what: str,
+    session: UserSession, par_file: str | None, set_id: str, role: str, what: str, exe: str, lib: str,
 ) -> tuple[bytes, str, bool]:
     """(.par content, set id, left to fill) for the network or solver parameters:
-    the user's set, else an empty set (kept from the previous generation).
+    the user's set, else a set with the parameters the desc of `lib` requires,
+    without value (kept from the previous generation).
     """
     if par_file:
         _session_file(session, par_file, f"{what} parameters file")
@@ -430,7 +445,8 @@ def _network_or_solver_par(
         par, ids, _ = assemble_par([spec], {par_file: content}, None)
         return par, ids[spec], False
     spec = (MANUAL, "", set_id)
-    par, ids, to_fill = assemble_par([spec], {}, None, _previous_generated_par(session, role))
+    par, ids, to_fill = assemble_par([spec], {}, None, _previous_generated_par(session, role),
+                                     {set_id: get_lib_parameters_to_set(exe, lib)})
     return par, ids[spec], bool(to_fill)
 
 
@@ -479,10 +495,11 @@ def post_generate(req: GenerateRequest, session: UserSession = Depends(get_sessi
     solver_source = req.solver_par_file or (ref_solver.par_file if ref_solver else None)
     network_par, network_id, network_to_fill = _network_or_solver_par(
         session, network_source, req.network_par_id or ref_network_id or "Network", "network", "Network",
+        exe, "DYNModelNetwork",
     )
     solver_par, solver_id, solver_to_fill = _network_or_solver_par(
         session, solver_source, req.solver_par_id or (ref_solver.par_id if ref_solver else None) or powsybl_solver,
-        "solver", "Solver",
+        "solver", "Solver", exe, solver_lib,
     )
 
     # PowSyBl reads converted copies of the .par files (for_powsybl); the
@@ -504,6 +521,7 @@ def post_generate(req: GenerateRequest, session: UserSession = Depends(get_sessi
             par_files = {f: _read(session, f) for source, f, _ in set(specs) if source == FILE}
             models_par, set_of, models_to_fill = assemble_par(
                 specs, par_files, generic_par(), _previous_generated_par(session, "models"),
+                _manual_parameters(exe, [rules[a["rule"]] for a in resolution["assignments"]], catalogue),
             )
             assignments = [{**a, "parameter_set_id": set_of[spec_key(rules[a["rule"]])]}
                            for a in resolution["assignments"]]
