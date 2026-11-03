@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Models for the rebuilt-rules tests, on the network of tests/unit/backend/association_network.py:
+     equipment rules (one for every load, the others by id), two automation systems found from their
+     connections (one through a macroConnect), and one case of each model left out. -->
+<dyn:dynamicModelsArchitecture xmlns:dyn="http://www.rte-france.com/dynawo">
+  <dyn:blackBoxModel id="L1" lib="LoadAlphaBeta" parFile="loads.par" parId="Load" staticId="L1"/>
+  <dyn:blackBoxModel id="L2" lib="LoadAlphaBeta" parFile="loads.par" parId="Load" staticId="L2"/>
+  <dyn:blackBoxModel id="L3" lib="LoadPQ" parFile="loads.par" parId="LoadPQ" staticId="L3"/>
+  <dyn:blackBoxModel id="G1" lib="GeneratorSynchronousFourWindings" parFile="gens.par" parId="G1" staticId="G1"/>
+  <dyn:blackBoxModel id="G2" lib="GeneratorSynchronousFourWindings" parFile="gens.par" parId="G2" staticId="G2"/>
+  <dyn:blackBoxModel id="TC_L1" lib="TapChangerAutomaton" parFile="loads.par" parId="TC"/>
+  <dyn:blackBoxModel id="OMS_LN1" lib="CurrentLimitAutomaton" parFile="loads.par" parId="OMS"/>
+  <dyn:blackBoxModel id="TC_BOTH" lib="TapChangerAutomaton" parFile="loads.par" parId="TC"/>
+  <dyn:blackBoxModel id="UV_ALONE" lib="UnderVoltageAutomaton" parFile="loads.par" parId="UV"/>
+  <dyn:blackBoxModel id="OMEGA_REF" lib="DYNModelOmegaRef" parFile="loads.par" parId="OmegaRef"/>
+  <dyn:blackBoxModel id="FAULT" lib="NodeFault" parFile="loads.par" parId="Fault"/>
+  <dyn:blackBoxModel id="DISCONNECT" lib="EventSetPointBoolean" parFile="loads.par" parId="Event"/>
+  <dyn:blackBoxModel id="GHOST" lib="LoadAlphaBeta" parFile="loads.par" parId="Load" staticId="NOT_IN_NETWORK"/>
+  <dyn:blackBoxModel id="SIGNAL" lib="SignalHandler" parFile="loads.par" parId="Signal"/>
+  <dyn:modelicaModel id="COMPOSITE"/>
+  <dyn:macroConnector id="MC_OMS">
+    <dyn:connect var1="currentLimitAutomaton_IMonitored" var2="@NAME@_iSide2"/>
+    <dyn:connect var1="currentLimitAutomaton_order" var2="@NAME@_state"/>
+  </dyn:macroConnector>
+  <dyn:connect id1="TC_L1" var1="tapChanger_tap" id2="L1" var2="transformerT_tap"/>
+  <dyn:macroConnect connector="MC_OMS" id1="OMS_LN1" id2="NETWORK" name2="LN1"/>
+  <dyn:connect id1="TC_BOTH" var1="tapChanger_tap" id2="L2" var2="transformer_tap"/>
+  <dyn:connect id1="TC_BOTH" var1="tapChanger_tap" id2="L3" var2="transformer_tap"/>
+</dyn:dynamicModelsArchitecture>

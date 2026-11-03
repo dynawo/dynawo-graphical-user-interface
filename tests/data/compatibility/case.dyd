@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Models with one problem each: an unknown library, an undeclared variable, an
+     undeclared parameter (case.par), a missing set; a Modelica model is not checked. -->
+<dyn:dynamicModelsArchitecture xmlns:dyn="http://www.rte-france.com/dynawo">
+  <dyn:blackBoxModel id="L1" lib="LoadAlphaBeta" parFile="case.par" parId="Load" staticId="L1">
+    <dyn:staticRef var="load_PPu" staticVar="p"/>
+  </dyn:blackBoxModel>
+  <dyn:blackBoxModel id="L2" lib="LoadAlphaBeta" parFile="case.par" parId="Missing" staticId="L2"/>
+  <dyn:blackBoxModel id="X" lib="NoSuchLib" parFile="case.par" parId="Load"/>
+  <dyn:blackBoxModel id="OMEGA" lib="DYNModelOmegaRef" parFile="case.par" parId="Load"/>
+  <dyn:modelicaModel id="M"/>
+  <dyn:macroConnector id="MC">
+    <dyn:connect var1="load_terminal" var2="@NAME@_ACPIN"/>
+    <dyn:connect var1="load_QPu" var2="@NAME@_q"/>
+  </dyn:macroConnector>
+  <dyn:macroConnect connector="MC" id1="L1" id2="NETWORK" name2="B1"/>
+  <dyn:connect id1="L2" var1="load_terminal" id2="NETWORK" var2="B1_ACPIN"/>
+  <dyn:connect id1="OMEGA" var1="omega_grp_0" id2="L1" var2="load_PPu"/>
+</dyn:dynamicModelsArchitecture>

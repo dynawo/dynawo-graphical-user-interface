@@ -15,6 +15,8 @@ import {
 } from 'antd'
 import { LinkOutlined, RedoOutlined, RollbackOutlined, SaveOutlined } from '@ant-design/icons'
 import client from '../api/client'
+import { errorDetail } from '../api/errors'
+import { valuesEqual } from './parValues'
 
 const { Title, Text } = Typography
 
@@ -82,19 +84,6 @@ function ReferenceButton({ par, suggestion, origNames, onUse }: {
       </Tooltip>
     </Popover>
   )
-}
-
-function valuesEqual(fileVal: string, widgetVal: string, type: string): boolean {
-  // Values still to fill are empty: not numbers.
-  if (fileVal.trim() === widgetVal.trim() || !fileVal.trim() || !widgetVal.trim())
-    return fileVal.trim() === widgetVal.trim()
-  try {
-    if (type === 'BOOL') return fileVal.trim().toLowerCase() === widgetVal.trim().toLowerCase()
-    if (type === 'INT') return parseInt(fileVal) === parseInt(widgetVal)
-    return parseFloat(fileVal) === parseFloat(widgetVal)
-  } catch {
-    return fileVal === widgetVal
-  }
 }
 
 export default function EditParameters() {
@@ -184,8 +173,8 @@ export default function EditParameters() {
       await fetchModified()
       const n = Object.keys(toReference).length
       setSuccess(n ? `${n} parameter(s) now read from the network.` : `${toValue.length} reference(s) turned into value(s) to fill.`)
-    } catch (err: any) {
-      setError(err.response?.data?.detail ?? 'Could not change the references')
+    } catch (err) {
+      setError(errorDetail(err, 'Could not change the references'))
     }
   }
 

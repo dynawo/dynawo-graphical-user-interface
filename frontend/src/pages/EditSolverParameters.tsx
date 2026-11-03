@@ -16,6 +16,7 @@ import {
 } from 'antd'
 import { RedoOutlined, RollbackOutlined, SaveOutlined } from '@ant-design/icons'
 import client from '../api/client'
+import { valuesEqual } from './parValues'
 
 const { Title, Text } = Typography
 
@@ -28,19 +29,6 @@ interface LogEntry { timestamp: string; par_file: string; set_id: string; change
 interface SolverDetail extends SolverInfo {
   pars: Par[]
   refs: Ref[]
-}
-
-function valuesEqual(fileVal: string, widgetVal: string, type: string): boolean {
-  // Values still to fill are empty: not numbers.
-  if (fileVal.trim() === widgetVal.trim() || !fileVal.trim() || !widgetVal.trim())
-    return fileVal.trim() === widgetVal.trim()
-  try {
-    if (type === 'BOOL') return fileVal.trim().toLowerCase() === widgetVal.trim().toLowerCase()
-    if (type === 'INT') return parseInt(fileVal) === parseInt(widgetVal)
-    return parseFloat(fileVal) === parseFloat(widgetVal)
-  } catch {
-    return fileVal === widgetVal
-  }
 }
 
 export default function EditSolverParameters() {

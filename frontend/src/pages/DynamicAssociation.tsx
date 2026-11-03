@@ -15,6 +15,10 @@ import {
 } from 'antd'
 import { ArrowDownOutlined, ArrowUpOutlined, CodeOutlined, CopyOutlined, DeleteOutlined, DownOutlined, FolderOpenOutlined, ImportOutlined, PlusOutlined, RightOutlined, SaveOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import client from '../api/client'
+import {
+  fitWidth, OPERATOR_LABEL, ruleSummary, sectionSettings, withAvailability,
+  type Condition, type GenerationOptions, type Model, type ModelsResponse, type Rule,
+} from './associationRules'
 import { errorDetail, errorStatus, retryTransient } from '../api/errors'
 
 const { Title, Text, Paragraph } = Typography
@@ -23,37 +27,11 @@ const { Title, Text, Paragraph } = Typography
 // order. Rules and settings are saved with the session. A rule with an
 // automation-system model adds one automation system per element.
 
-type ParSource = 'file' | 'generic' | 'manual'
-
-interface Condition { attribute: string; operator: string; value: string | string[] }
-interface Rule {
-  element_type: string
-  conditions: Condition[]
-  model: string
-  par_source: ParSource
-  par_file: string
-  parameter_set_id: string
-  // Automation systems: their other fields (e.g. side); absent ones take the default.
-  fields?: Record<string, string>
-}
 // Page-only key, stable when rules are moved or removed.
 type UiRule = Rule & { _key: number }
 
 interface ElementType { id: string; label: string }
 interface Attribute { name: string; kind: 'number' | 'boolean' | 'text'; operators: string[]; values: string[] | null }
-// custom: added by the user, shared (all sessions) or live (this session).
-// unavailable: why the selected Dynawo cannot use it (not in its ddb).
-// Automation-system field with its values, the first being the default.
-interface AutomationField { name: string; label: string; values: { value: string; label: string }[] }
-interface Model {
-  name: string; description: string; category: string; suggested: boolean; custom?: 'shared' | 'live'; unavailable?: string
-  // Automation systems: their fields, what they need on the element, their id prefix.
-  automation?: boolean; fields?: AutomationField[]; requires?: string | null; id_prefix?: string; note?: string | null
-}
-interface ModelsResponse { dynawo_version: string | null; models: (Model & { available?: boolean })[] }
-
-const withAvailability = (res: ModelsResponse): Model[] => res.models.map(({ available, ...m }) =>
-  available === false ? { ...m, unavailable: `not available for Dynawo ${res.dynawo_version}` } : m)
 interface CustomModel { lib: string; category: string; dynawo_version: string; shared: boolean }
 interface ParFile { name: string; sets: string[] }
 interface ParamSources { files: ParFile[]; generic: { available: boolean; sets: string[] } }
@@ -78,16 +56,6 @@ interface Context {
   last_result: GenerateResult | null
 }
 // Generate card settings; null means "from the reference job" or default.
-interface GenerationOptions {
-  reference_jobs: string | null
-  network_par_file: string | null
-  network_par_id: string | null
-  solver_lib: string | null
-  solver_par_file: string | null
-  solver_par_id: string | null
-  start_time: number | null
-  stop_time: number | null
-}
 const NO_OPTIONS: GenerationOptions = {
   reference_jobs: null, network_par_file: null, network_par_id: null,
   solver_lib: null, solver_par_file: null, solver_par_id: null, start_time: null, stop_time: null,
@@ -108,9 +76,6 @@ interface GenerateResult {
   report: string
 }
 
-const OPERATOR_LABEL: Record<string, string> = {
-  '=': '=', '!=': '≠', '<': '<', '<=': '≤', '>': '>', '>=': '≥', in: 'in', matches: 'matches',
-}
 const SOLVERS = [
   { value: 'dynawo_SolverIDA', label: 'IDA (dynawo_SolverIDA)' },
   { value: 'dynawo_SolverSIM', label: 'SIM (dynawo_SolverSIM)' },
@@ -123,10 +88,6 @@ const SHOWN_VALUES = 30
 // Model dropdown width (px), fitting the longest model names. A number keeps
 // the dropdown virtual, unlike `false`.
 const MODEL_POPUP_WIDTH = 640
-
-// Width of a select fitting its value, within [min, max] characters.
-const fitWidth = (text: string, min: number, max = 90) =>
-  `${Math.min(max, Math.max(min, text.length + 6))}ch`
 
 let nextKey = 1
 const withKey = (rule: Rule): UiRule => ({ ...rule, _key: nextKey++ })
@@ -226,18 +187,6 @@ function ConditionRow({ elementType, condition, attributes, notConnected, onChan
       </Tooltip>
     </Space>
   )
-}
-
-// One line describing a folded rule: element type, conditions, model and its fields.
-function ruleSummary(rule: Rule, typeLabel: string, model: Model | undefined): string {
-  const conditions = rule.conditions
-    .filter(c => c.attribute)
-    .map(c => `${c.attribute} ${OPERATOR_LABEL[c.operator] ?? c.operator} ${Array.isArray(c.value)
-      ? c.value.slice(0, 5).join(', ') + (c.value.length > 5 ? ` … (${c.value.length} values)` : '')
-      : c.value}`)
-  const fields = (model?.fields ?? []).map(f => `${f.label.toLowerCase()} ${rule.fields?.[f.name] || f.values[0].value}`)
-  return `${typeLabel}${conditions.length ? ` where ${conditions.join(' and ')}` : ''} → ${rule.model || 'no model'}`
-    + (fields.length ? ` (${fields.join(', ')})` : '')
 }
 
 // ── One rule ──────────────────────────────────────────────────────────────────
@@ -490,10 +439,6 @@ function AddModelDialog({ open, categories, onClose, onAdded, onRemoved }: {
 
 // ── Saved rule sets ───────────────────────────────────────────────────────────
 
-// The "Network and solver parameters, time window" settings, saved with rule sets.
-const SECTION_SETTINGS = ['network_par_file', 'network_par_id', 'solver_lib', 'solver_par_file', 'solver_par_id', 'start_time', 'stop_time'] as const
-const sectionSettings = (o: Partial<GenerationOptions>): Partial<GenerationOptions> =>
-  Object.fromEntries(SECTION_SETTINGS.filter(k => k in o).map(k => [k, o[k]]))
 
 interface RuleSet { name: string; saved: string; count: number }
 
