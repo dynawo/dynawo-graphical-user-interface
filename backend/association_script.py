@@ -217,6 +217,10 @@ def write_job(args: argparse.Namespace) -> str:
     for name, set_id in specs:
         if set_id not in set_ids(files[name]):
             sys.exit(f"Set {set_id!r} not found in {args.par_path(name)}")
+        unset = [p.get("name") for s in ET.fromstring(files[name]).findall(f"{{{_NS}}}set") if s.get("id") == set_id
+                 for p in s.findall(f"{{{_NS}}}par") if not p.get("value")]
+        if unset:
+            sys.exit(f"Set {set_id!r} of {args.par_path(name)} has parameters without value: {', '.join(unset)}")
     models_par, set_of, _ = assemble_par([(FILE, name, set_id) for name, set_id in specs], files, None)
     set_of = {(name, set_id): merged for (_, name, set_id), merged in set_of.items()}
     mapping = build_mapping(owner, automation, set_of)
@@ -400,8 +404,8 @@ and exits with Dynawo's exit code. PowSyBl reads the configuration of
 PowSyBl reads a single `.par` for the models: the script merges the sets the
 rules use from their files, as the GUI does (a set id found in two files is
 renamed in the merged copy). `{manual}` holds the sets filled in the GUI
-rather than taken from a file: sets still empty must be filled before
-running.
+rather than taken from a file: parameters still without value must be
+filled before running.
 '''
 
 _FAKE_DYNAWO_CMD = '''@echo off

@@ -8,7 +8,7 @@
 # SPDX-License-Identifier: MPL-2.0
 #
 
-from backend.par_parser import macro_usage, parse_par
+from backend.par_parser import macro_usage, parse_par, reference_names
 
 
 def _by_name(entries: list[dict]) -> dict[str, dict]:
@@ -25,7 +25,7 @@ def test_plain_set_reads_pars_and_references(data_dir):
         {"name": "load_isControllable", "type": "BOOL", "value": "false", "shared": False},
     ]
     assert load["refs"] == [
-        {"name": "load_P0Pu", "origData": "IIDM", "origName": "p_pu", "shared": False},
+        {"name": "load_P0Pu", "type": "DOUBLE", "origData": "IIDM", "origName": "p_pu", "shared": False},
     ]
 
 
@@ -60,3 +60,9 @@ def test_unknown_macro_contributes_nothing():
 
 def test_macro_usage_lists_every_set_of_a_macro(data_dir):
     assert macro_usage((data_dir / "par/macro_and_sets.par").read_bytes()) == {"MACRO_GEN": ["GEN1", "GEN2"]}
+
+
+def test_reference_names_lists_every_iidm_reference(data_dir):
+    pairs = reference_names((data_dir / "par/macro_and_sets.par").read_bytes())
+
+    assert sorted(pairs) == [("generator_P0Pu", "p_pu"), ("load_P0Pu", "p_pu")]

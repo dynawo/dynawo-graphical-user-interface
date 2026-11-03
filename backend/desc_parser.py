@@ -90,6 +90,13 @@ def get_lib_parameter_details(dynawo_exe: str, lib: str) -> list[dict]:
     return sorted(params, key=lambda p: p["name"])
 
 
+def get_lib_parameters_to_set(dynawo_exe: str, lib: str) -> list[tuple[str, str]]:
+    """(name, value type) of the parameters a .par must give the library:
+    neither read-only nor with a default value in its ddb/<lib>.desc.xml."""
+    return [(p["name"], p["value_type"] or "DOUBLE") for p in get_lib_parameter_details(dynawo_exe, lib)
+            if not p["read_only"] and p["default"] is None]
+
+
 def get_lib_variable_types(dynawo_exe: str, lib: str) -> dict[str, str]:
     """Return {variable name: valueType} for a library's ddb/<lib>.desc.xml.
 

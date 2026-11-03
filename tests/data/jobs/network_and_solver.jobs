@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A job whose network and solver sets are in their own .par (par/network_and_solver.par). -->
+<jobs xmlns="http://www.rte-france.com/dynawo">
+  <job name="test">
+    <solver lib="dynawo_SolverIDA" parFile="network_and_solver.par" parId="IDA"/>
+    <modeler compileDir="outputs/compilation">
+      <network iidmFile="network.iidm" parFile="network_and_solver.par" parId="Network"/>
+      <dynModels dydFile="macro_and_sets.dyd"/>
+    </modeler>
+    <simulation startTime="0" stopTime="10"/>
+    <outputs directory="outputs"/>
+  </job>
+</jobs>
