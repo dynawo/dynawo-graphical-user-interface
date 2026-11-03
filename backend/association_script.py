@@ -17,7 +17,8 @@ import xml.etree.ElementTree as ET
 import zipfile
 from typing import Callable
 
-from backend import association_par, association_rules
+from backend import association_par, association_rules, compatibility
+from backend.association_custom import numeric_version
 from backend.association_par import FILE, GENERIC, _Assembler, spec_key
 from backend.association_rules import (
     automation_fields,
@@ -28,19 +29,22 @@ from backend.association_rules import (
     get_automation_system,
     get_element_type,
 )
+from backend.powsybl_config import _FAKE_DYNAWO_SCRIPT
 
 # Export of the last generation as a standalone folder: a pypowsybl script,
-# the network and the user's .par files the rules use, the PowSyBl
-# config.yml it runs with, the models added in the GUI and a README. The
-# script merges the .par files as the GUI does; element tables, the merge
-# and the .par conversion reuse the app's functions, conditions are written
-# by condition_code.
+# the network and the user's .par files the rules use, the models added in
+# the GUI and a README. As in the GUI, PowSyBl writes the job with a fake
+# Dynawo, Dynawo's update tool upgrades it to the Dynawo running it, then the
+# script runs it. The script merges the .par files as the GUI does; element
+# tables, the merge, the .par conversion and the upgrade reuse the app's
+# functions, conditions are written by condition_code.
 
 SCRIPT_NAME = "dynamic_association.py"
-CONFIG_NAME = "config.yml"
 MODELS_JSON_NAME = "models.json"
 README_NAME = "README.md"
 RUNS_DIR = "runs"
+# PowSyBl configuration and fake Dynawo, written by the script.
+POWSYBL_DIR = "powsybl"
 # Sets filled in the GUI (no file of the user's), and the app's generic sets.
 MANUAL_PAR_NAME = "manual_sets.par"
 GENERIC_PAR_NAME = "generic.par"
@@ -48,38 +52,52 @@ GENERIC_PAR_NAME = "generic.par"
 _INTRO = '''#!/usr/bin/env python3
 #
 # Dynamic association exported from the Dynawo GUI on {date}, for Dynawo
-# {dynawo_version}. PowSyBl applies the rules to the network, writes the
-# Dynawo job and runs it. See {readme}.
+# {dynawo_version}. PowSyBl applies the rules to the network and writes the
+# Dynawo job, Dynawo's update tool upgrades it to the Dynawo running it, then
+# the script runs it. See {readme}.
 #
 #     python {script} [--network other.iidm] [--par-dir DIR] [--par NAME=PATH] ...
 #     python {script} --help
 '''
 
-_SETUP = r'''
+_IMPORTS = '''
 import argparse
 import copy
+import glob
 import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
+'''
 
+_SETUP = r'''
 HERE = os.path.dirname(os.path.abspath(__file__))
 RUNS = os.path.join(HERE, "runs")
+POWSYBL = os.path.join(HERE, "powsybl")
 
 # Read by GraalVM, pypowsybl's Java side, when pypowsybl is imported: the
-# PowSyBl configuration of this folder (not ~/.itools), runs kept in runs/.
+# PowSyBl configuration of powsybl/ (not ~/.itools), runs kept in runs/.
 if " " in HERE:
     sys.exit(f"Move this folder to a path without spaces (GraalVM options cannot hold them): {HERE}")
 os.makedirs(RUNS, exist_ok=True)
+os.makedirs(POWSYBL, exist_ok=True)
+# PowSyBl writes the job with the fake Dynawo of powsybl/, which answers its
+# version query with WRITE_VERSION and simulates nothing.
+_config = f"dynawo:\n  homeDir: {json.dumps(POWSYBL)}\n  debug: true\n"
+for _name, _text in {**FAKE_DYNAWO, "version": WRITE_VERSION + "\n", "config.yml": _config}.items():
+    with open(os.path.join(POWSYBL, _name), "w", encoding="utf-8", newline="") as _fh:
+        _fh.write(_text)
+os.chmod(os.path.join(POWSYBL, "dynawo.sh"), 0o755)
 # PowSyBl's per-process working folders, left empty by earlier runs.
 for _name in os.listdir(RUNS):
     if _name.startswith("itools_common_") and not os.listdir(os.path.join(RUNS, _name)):
         os.rmdir(os.path.join(RUNS, _name))
 _options = re.sub(r"-D(powsybl\.config\.dirs|java\.io\.tmpdir)=\S*", "", os.environ.get("GRAALVM_OPTIONS", ""))
-os.environ["GRAALVM_OPTIONS"] = f"{_options.strip()} -Dpowsybl.config.dirs={HERE} -Djava.io.tmpdir={RUNS}".strip()
+os.environ["GRAALVM_OPTIONS"] = f"{_options.strip()} -Dpowsybl.config.dirs={POWSYBL} -Djava.io.tmpdir={RUNS}".strip()
 
 import pandas as pd  # noqa: E402
 import pypowsybl as pp  # noqa: E402
@@ -128,7 +146,8 @@ def arguments() -> argparse.Namespace:
     """Command-line arguments; files default to those of this folder."""
     default = lambda name: f"(default: {name} in this folder)" if name else "(default: none)"
     parser = argparse.ArgumentParser(description="Dynamic association exported from the Dynawo GUI: PowSyBl "
-                                     "writes the Dynawo job and runs it with the Dynawo of config.yml.")
+                                     "writes the Dynawo job, Dynawo's update tool upgrades it to the Dynawo "
+                                     "running it, then the script runs it.")
     parser.add_argument("--network", help=f"IIDM network {default(NETWORK)}")
     parser.add_argument("--par-dir", help="folder where to find the .par files, by name "
                                           "(default: this folder): " + ", ".join(PAR_FILES))
@@ -144,6 +163,14 @@ def arguments() -> argparse.Namespace:
                                               f"{default(MODELS_JSON)}")
     parser.add_argument("--start-time", type=float, default=START_TIME, help="(default: %(default)s s)")
     parser.add_argument("--stop-time", type=float, default=STOP_TIME, help="(default: %(default)s s)")
+    parser.add_argument("--dynawo", default=DYNAWO,
+                        help="dynawo.sh (dynawo.cmd on Windows) of the Dynawo running the job (default: %(default)s)")
+    parser.add_argument("--dynawo-version", help="Dynawo version to upgrade the job to (default: that of --dynawo)")
+    parser.add_argument("--update-tool", help="Dynawo's updateXML/update.py (default: the most recent found in "
+                                              "sbin/updateXML of --dynawo, $DYNAWO_HOME, the GUI's configuration)")
+    parser.add_argument("--no-update", action="store_true",
+                        help=f"run the job as PowSyBl writes it, for Dynawo {numeric_version(WRITE_VERSION)}")
+    parser.add_argument("--write-only", action="store_true", help="write (and upgrade) the job without running it")
     args = parser.parse_args()
     replaced = {}
     for item in args.par:
@@ -159,11 +186,29 @@ def arguments() -> argparse.Namespace:
     args.solver_par = args.solver_par or par_path(SOLVER_PAR)
     if args.models_json is None and MODELS_JSON:
         args.models_json = os.path.join(HERE, MODELS_JSON)
+    if args.dynawo and not os.path.isfile(args.dynawo):
+        parser.error(f"Dynawo not found: {args.dynawo} (see --dynawo)")
+    if args.update_tool and not os.path.isfile(args.update_tool):
+        parser.error(f"Update tool not found: {args.update_tool} (see --update-tool)")
+    if not args.dynawo and not args.write_only:
+        parser.error("no Dynawo to run the job: give --dynawo (or --write-only)")
     return args
 
 
-def main() -> None:
-    args = arguments()
+def dynawo_version(dynawo: str) -> str:
+    """First line of `dynawo.sh version`, e.g. "1.7.1 (rev:v1.7-1250b93)"."""
+    try:
+        proc = subprocess.run([dynawo, "version"], capture_output=True, text=True, timeout=60)
+    except OSError as exc:
+        sys.exit(f"Cannot run {dynawo}: {exc.strerror}")
+    lines = proc.stdout.strip().splitlines()
+    if proc.returncode != 0 or not lines:
+        sys.exit(f"Cannot get the version of {dynawo}: {(proc.stdout + proc.stderr).strip()[-500:]}")
+    return lines[0].strip()
+
+
+def write_job(args: argparse.Namespace) -> str:
+    """The job PowSyBl writes with the fake Dynawo, in its run folder of runs/."""
     network = pp.network.load(args.network)
     owner, automation = select_models(network)
     # The sets the rules use, merged into one .par as PowSyBl reads a single one.
@@ -177,6 +222,7 @@ def main() -> None:
     mapping = build_mapping(owner, automation, set_of)
     report = rep.ReportNode()
     before = set(os.listdir(RUNS))
+    error = None
     with tempfile.TemporaryDirectory() as tmp_dir:
         provider = {
             "parametersFile":         powsybl_copy(models_par, "models.par", tmp_dir),
@@ -189,18 +235,69 @@ def main() -> None:
         if args.models_json:
             provider["additionalModelsFile"] = os.path.abspath(args.models_json)
         parameters = dyn.Parameters(args.start_time, args.stop_time, provider)
-        result = dyn.Simulation().run(network, mapping, parameters=parameters, report_node=report)
+        try:
+            dyn.Simulation().run(network, mapping, parameters=parameters, report_node=report)
+        except Exception as exc:
+            error = str(exc)
     print(report)
-    print("status:", result.status(), result.status_text() or "")
     # PowSyBl's run folder is kept; its other working files (version checks…) are removed.
+    jobs = []
     for name in sorted(set(os.listdir(RUNS)) - before):
         path = os.path.join(RUNS, name)
         if name.startswith("dynawo_") and not name.startswith("dynawo_version_"):
-            print("run folder (Dynawo inputs and outputs):", path)
+            jobs += glob.glob(os.path.join(path, "*.jobs"))
         elif os.path.isdir(path):
             shutil.rmtree(path, ignore_errors=True)
         else:
             os.remove(path)
+    if error or not jobs:
+        sys.exit(f"PowSyBl could not write the job: {error or 'no .jobs written'}")
+    print(f"job written by PowSyBl for Dynawo {numeric_version(WRITE_VERSION)}:", jobs[0])
+    return jobs[0]
+
+
+def upgrade(jobs: str, target: str | None, args: argparse.Namespace) -> str:
+    """The job upgraded to Dynawo `target` by applying all of Dynawo's updates
+    up to it, in a folder next to it; the job as written when it cannot be."""
+    if args.no_update or not target:
+        return jobs
+    tool = args.update_tool or (find_update_tool(args.dynawo) if args.dynawo else None)
+    python = update_python()
+    if not tool or not python:
+        why = ("the update tool needs a Python with lxml (pip install lxml)" if tool
+               else "Dynawo's update tool (updateXML/update.py) was not found (see --update-tool)")
+        print(f"job not upgraded to Dynawo {target}: {why}")
+        return jobs
+    folder = os.path.join(os.path.dirname(jobs), f"dynawo{target}")
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        try:
+            result = run_update(tool, python, jobs, FULL_UPGRADE_ORIGIN, target, tmp_dir)
+        except RuntimeError as exc:
+            sys.exit(f"The update tool failed: {exc}")
+        os.makedirs(folder, exist_ok=True)
+        for name, path in result["files"].items():
+            with open(os.path.join(folder, name), "wb") as fh:
+                fh.write(relink(path, set(result["files"])))
+    print(f"job upgraded to Dynawo {target} by {tool} ({len(result['tickets'])} update(s) applied):", folder)
+    return os.path.join(folder, os.path.basename(jobs))
+
+
+def run_dynawo(dynawo: str, jobs: str) -> int:
+    """Dynawo's exit code on the job."""
+    print("running:", dynawo, "jobs", jobs, flush=True)
+    code = subprocess.run([dynawo, "jobs", jobs], cwd=os.path.dirname(jobs)).returncode
+    outputs = ET.parse(jobs).getroot().find(f".//{{{_NS}}}outputs")
+    folder = os.path.join(os.path.dirname(jobs), outputs.get("directory", "outputs") if outputs is not None else "")
+    print("Dynawo", "succeeded" if code == 0 else f"failed (exit code {code})", "- outputs:", folder)
+    return code
+
+
+def main() -> None:
+    args = arguments()
+    target = args.dynawo_version or (numeric_version(dynawo_version(args.dynawo)) if args.dynawo else None)
+    jobs = upgrade(write_job(args), target, args)
+    if not args.write_only:
+        sys.exit(run_dynawo(args.dynawo, jobs))
 
 
 if __name__ == "__main__":
@@ -211,9 +308,15 @@ _README = '''# Dynamic association
 
 Exported from the Dynawo GUI on {date}, for Dynawo {dynawo_version}.
 
-`{script}` applies the rules defined in the GUI to a network with pypowsybl:
-PowSyBl writes the Dynawo job (`.jobs`, `.dyd`, `.par`) and runs it with the
-Dynawo set in `{config}`.
+`{script}` applies the rules defined in the GUI to a network, in three steps:
+
+1. **Write**: PowSyBl writes the Dynawo job (`.jobs`, `.dyd`, `.par`) for
+   Dynawo {write_version}, with a fake Dynawo that simulates nothing (in
+   `{powsybl}/`). The job never depends on the Dynawo running it.
+2. **Upgrade**: Dynawo's update tool brings the job to the version of the
+   Dynawo running it, so that it runs on a Dynawo more recent than the one
+   PowSyBl writes for.
+3. **Run**: the script runs the job with that Dynawo.
 
 ## Content
 
@@ -224,8 +327,14 @@ Dynawo set in `{config}`.
 ## Requirements
 
 - Python with **pypowsybl** (the GUI used pypowsybl {pypowsybl}).
-- A **Dynawo** install: set its folder, the one holding `dynawo.sh`, as
-  `homeDir` in `{config}`.
+- A **Dynawo** install: its `dynawo.sh` (`dynawo.cmd` on Windows) is
+  `{dynawo}` by default, else give it with `--dynawo`.
+- For the upgrade, Dynawo's **update tool** (`updateXML/update.py`) and
+  **lxml** in the Python running the script (`pip install lxml`). The most
+  recent tool found is used, in `sbin/updateXML` of the Dynawo, in
+  `$DYNAWO_HOME` (`sbin/` or `util/`), or in the GUI's configuration
+  (`~/.config/dynawo_ihm/updateXML`); `--update-tool` gives another. Without
+  it, the job runs as written, which suits Dynawo {write_version}.
 - A path **without spaces** to this folder (GraalVM, pypowsybl's Java side,
   cannot take them in its options).
 
@@ -242,6 +351,7 @@ python {script} --network other.iidm
 python {script} --par-dir /path/to/my/par/files
 python {script} --par {example_par}=/path/to/other.par
 python {script} --stop-time 50
+python {script} --dynawo /path/to/dynawo/dynawo.sh
 python {script} --help
 ```
 
@@ -261,12 +371,29 @@ python {script} --help
   file){models_json}.
 - `--start-time`, `--stop-time`: the time window, in seconds.
 
+Dynawo version:
+
+- `--dynawo`: the `dynawo.sh` running the job; the job is upgraded to its
+  version.
+- `--dynawo-version`: the version to upgrade to, in place of that of
+  `--dynawo` (e.g. to run the job elsewhere, with `--write-only`).
+- `--update-tool`: the update tool's `update.py`.
+- `--no-update`: run the job as PowSyBl writes it.
+- `--write-only`: write (and upgrade) the job, without running it.
+
 ## Results
 
-PowSyBl reads the `{config}` of this folder, never `~/.itools`. Each run is
-kept in `{runs}/` of this folder (`dynawo_<number>/`: the job PowSyBl wrote,
-its `.dyd` and `.par`, and Dynawo's `outputs/`); the script prints its path
-with PowSyBl's report and the run status.
+Each run is kept in `{runs}/` of this folder, as `dynawo_<number>/`:
+
+- the job PowSyBl wrote (`powsybl_dynawo.jobs`, its `.dyd`, `.par` and
+  network);
+- `dynawo<version>/`: the job upgraded to that Dynawo version, its files
+  pointing to the others one folder up;
+- `outputs/`, next to the job Dynawo ran.
+
+The script prints PowSyBl's report, the job it runs and the outputs folder,
+and exits with Dynawo's exit code. PowSyBl reads the configuration of
+`{powsybl}/`, written by the script, never `~/.itools`.
 
 ## Parameters
 
@@ -277,16 +404,39 @@ rather than taken from a file: sets still empty must be filled before
 running.
 '''
 
+_FAKE_DYNAWO_CMD = '''@echo off
+rem Fake Dynawo of the dynamic association: answers PowSyBl's version query
+rem with the content of the "version" file next to it, simulates nothing.
+if "%1"=="version" type "%~dp0version"
+exit /b 0
+'''
+
 
 def _intro(generation: dict) -> str:
     return _INTRO.format(date=datetime.date.today().isoformat(), dynawo_version=generation["dynawo_version"],
                          readme=README_NAME, script=SCRIPT_NAME)
 
 
-def _constants(generation: dict, iidm: str, par_files: list[str], network: tuple, solver: tuple) -> str:
+def _fake_dynawo(generation: dict) -> str:
+    """Constants _SETUP writes the fake Dynawo with."""
+    with open(_FAKE_DYNAWO_SCRIPT, encoding="utf-8") as fh:
+        script = fh.read()
+    return "\n".join([
+        "",
+        "# Version PowSyBl writes the job for (that of the GUI's generation), and the",
+        "# fake Dynawo it writes it with.",
+        f"WRITE_VERSION = {generation['dynawo_version']!r}",
+        f"FAKE_DYNAWO = {{'dynawo.sh': {script!r}, 'dynawo.cmd': {_FAKE_DYNAWO_CMD!r}}}",
+    ])
+
+
+def _constants(generation: dict, iidm: str, par_files: list[str], network: tuple, solver: tuple,
+               dynawo: str | None) -> str:
     models_json = MODELS_JSON_NAME if generation.get("additional_models") else None
     return "\n".join([
         "",
+        "# Dynawo running the job (that selected in the GUI), see --dynawo.",
+        f"DYNAWO = {dynawo!r}",
         "# Defaults, files of this folder.",
         f"NETWORK = {iidm!r}",
         "# .par files, looked up by name (see --par-dir, --par).",
@@ -301,6 +451,9 @@ def _constants(generation: dict, iidm: str, par_files: list[str], network: tuple
         f"_NS = {association_par._NS!r}",
         f"_VOLTAGE_LEVEL_ID = re.compile({association_rules._VOLTAGE_LEVEL_ID.pattern!r})",
         f"_VOLTAGE_LEVEL_ATTRIBUTES = {association_rules._VOLTAGE_LEVEL_ATTRIBUTES!r}",
+        f"_FILE_ATTRIBUTES = {compatibility._FILE_ATTRIBUTES!r}",
+        f"FULL_UPGRADE_ORIGIN = {compatibility.FULL_UPGRADE_ORIGIN!r}",
+        'APP_UPDATE_TOOL = os.path.join(os.path.expanduser("~"), ".config", "dynawo_ihm", "updateXML", "update.py")',
         "",
     ])
 
@@ -308,16 +461,20 @@ def _constants(generation: dict, iidm: str, par_files: list[str], network: tuple
 def _functions() -> str:
     """App functions the script runs as they are."""
     functions = [element_table, association_par.for_powsybl, association_par.set_ids, association_par._unique,
-                 _Assembler, association_par.assemble_par]
+                 _Assembler, association_par.assemble_par, numeric_version, compatibility.version_tuple,
+                 compatibility.update_tool_places, compatibility.latest_script, compatibility.find_update_tool,
+                 compatibility.update_python, compatibility.run_update, compatibility.relink]
     return "".join("\n\n" + inspect.getsource(f) for f in functions)
 
 
 def build_script(generation: dict, network, iidm: str, par_files: list[str], rule_specs: list,
-                 network_par: tuple, solver_par: tuple) -> str:
+                 network_par: tuple, solver_par: tuple, dynawo: str | None) -> str:
     """Script reproducing a recorded generation, with the files of the exported
     folder: `rule_specs` gives each rule's (.par name, set id), None if
-    skipped; `network` gives the attribute kinds."""
-    return (_intro(generation) + _SETUP + _constants(generation, iidm, par_files, network_par, solver_par)
+    skipped; `network` gives the attribute kinds; `dynawo` is the Dynawo
+    running the job by default."""
+    return (_intro(generation) + _IMPORTS + _fake_dynawo(generation) + _SETUP
+            + _constants(generation, iidm, par_files, network_par, solver_par, dynawo)
             + _functions() + "\n\n" + _select_function(generation, network, rule_specs) + _FOOTER)
 
 
@@ -375,25 +532,13 @@ def _select_function(generation: dict, network, rule_specs: list) -> str:
     return "\n".join(lines)
 
 
-def build_config(dynawo_home: str | None, dynawo_version: str) -> str:
-    """PowSyBl config.yml of the exported folder."""
-    home = json.dumps(dynawo_home or "/path/to/dynawo")
-    return (
-        "# PowSyBl configuration read by dynamic_association.py, in place of ~/.itools.\n"
-        "dynawo:\n"
-        f"  # Dynawo folder holding dynawo.sh (exported for Dynawo {dynawo_version}).\n"
-        f"  homeDir: {home}\n"
-        "  # Keeps PowSyBl's run folders (Dynawo inputs and outputs).\n"
-        "  debug: true\n"
-    )
-
-
 def _readme(generation: dict, files: dict[str, str], par_files: list[str], network_par: tuple, solver_par: tuple,
-            pypowsybl_version: str) -> str:
+            dynawo: str | None, pypowsybl_version: str) -> str:
     rows = "\n".join(f"| `{name}` | {role} |" for name, role in files.items())
     return _README.format(
         date=datetime.date.today().isoformat(), dynawo_version=generation["dynawo_version"],
-        script=SCRIPT_NAME, config=CONFIG_NAME, runs=RUNS_DIR, manual=MANUAL_PAR_NAME, files=rows,
+        write_version=numeric_version(generation["dynawo_version"]), dynawo=dynawo or "none",
+        script=SCRIPT_NAME, powsybl=POWSYBL_DIR, runs=RUNS_DIR, manual=MANUAL_PAR_NAME, files=rows,
         pypowsybl=pypowsybl_version, par_files=", ".join(f"`{p}`" for p in par_files) or "none",
         example_par=par_files[0] if par_files else "NAME",
         models_json="" if generation.get("additional_models") else ": none were added",
@@ -409,15 +554,15 @@ def _entry(name: str, mode: int) -> zipfile.ZipInfo:
     return info
 
 
-def build_export(generation: dict, network, read: Callable[[str], bytes], dynawo_home: str | None,
+def build_export(generation: dict, network, read: Callable[[str], bytes], dynawo: str | None,
                  pypowsybl_version: str) -> bytes:
     """Zip of the exported folder. `read` gives the content of a session file:
     the network, the user's .par files the rules use, and the generated .par
-    for the sets filled in the GUI."""
+    for the sets filled in the GUI; `dynawo` is the selected Dynawo."""
     content: dict[str, bytes] = {}      # name in the folder -> content
     roles: dict[str, str] = {}          # name in the folder -> role, for the README
     names: dict[str, str] = {}          # session file -> name in the folder
-    reserved = {SCRIPT_NAME, CONFIG_NAME, MODELS_JSON_NAME, README_NAME, MANUAL_PAR_NAME, GENERIC_PAR_NAME}
+    reserved = {SCRIPT_NAME, MODELS_JSON_NAME, README_NAME, MANUAL_PAR_NAME, GENERIC_PAR_NAME, RUNS_DIR, POWSYBL_DIR}
 
     def add(session_name: str, role: str) -> str:
         """Session file copied into the folder under its own name (made unique)."""
@@ -472,18 +617,16 @@ def build_export(generation: dict, network, read: Callable[[str], bytes], dynawo
     par_files = sorted({spec[0] for spec in rule_specs if spec} | {network_par[0], solver_par[0]})
 
     folder = os.path.splitext(SCRIPT_NAME)[0]
-    files = {SCRIPT_NAME: "the script", README_NAME: "this file",
-             CONFIG_NAME: "PowSyBl configuration: the Dynawo to run"}
+    files = {SCRIPT_NAME: "the script", README_NAME: "this file"}
     if generation.get("additional_models"):
         files[MODELS_JSON_NAME] = "models added in the GUI"
     files.update(roles)
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
-        script = build_script(generation, network, iidm, par_files, rule_specs, network_par, solver_par)
+        script = build_script(generation, network, iidm, par_files, rule_specs, network_par, solver_par, dynawo)
         archive.writestr(_entry(f"{folder}/{SCRIPT_NAME}", 0o755), script)
         archive.writestr(_entry(f"{folder}/{README_NAME}", 0o644),
-                         _readme(generation, files, par_files, network_par, solver_par, pypowsybl_version))
-        archive.writestr(_entry(f"{folder}/{CONFIG_NAME}", 0o644), build_config(dynawo_home, generation["dynawo_version"]))
+                         _readme(generation, files, par_files, network_par, solver_par, dynawo, pypowsybl_version))
         if generation.get("additional_models"):
             archive.writestr(_entry(f"{folder}/{MODELS_JSON_NAME}", 0o644),
                              json.dumps(generation["additional_models"], indent=2))
