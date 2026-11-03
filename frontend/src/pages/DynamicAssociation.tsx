@@ -1068,7 +1068,7 @@ export default function DynamicAssociation() {
               onClick={generate}>
               Generate
             </Button>
-            <Tooltip title="The last generation as a pypowsybl script, to run outside the GUI in the folder of the session's files (Download Files)">
+            <Tooltip title="The last generation as a folder (zip) to run outside the GUI: a pypowsybl script, the network, the .par files, the PowSyBl config.yml for the selected Dynawo and the added models">
               <Button icon={<CodeOutlined />} disabled={!context?.script_available}
                 onClick={() => { window.location.href = '/api/dynamic-association/script' }}>
                 Export as Python script

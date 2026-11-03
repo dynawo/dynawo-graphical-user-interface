@@ -15,6 +15,7 @@ import tempfile
 import xml.etree.ElementTree as ET
 from typing import Any, Literal
 
+import pypowsybl
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
@@ -82,7 +83,7 @@ from backend.association_rule_sets import (
     save_rule_set,
     valid_name,
 )
-from backend.association_script import build_script
+from backend.association_script import build_export
 from backend.desc_parser import get_lib_symbols
 from backend.jobs_parser import read_network_par, read_simulation_config, read_solver_info
 from backend.user_config import load_user_config
@@ -473,13 +474,14 @@ def post_generate(req: GenerateRequest, session: UserSession = Depends(get_sessi
     custom = _custom_models(session, numeric_version(dynawo_version))
     catalogue = with_custom_models(_catalogue(), custom)
     additional = additional_models_file(custom)
+    # User .par of the network and solver sets; None: created empty, to fill.
+    network_source = req.network_par_file or ref_network_par
+    solver_source = req.solver_par_file or (ref_solver.par_file if ref_solver else None)
     network_par, network_id, network_to_fill = _network_or_solver_par(
-        session, req.network_par_file or ref_network_par,
-        req.network_par_id or ref_network_id or "Network", "network", "Network",
+        session, network_source, req.network_par_id or ref_network_id or "Network", "network", "Network",
     )
     solver_par, solver_id, solver_to_fill = _network_or_solver_par(
-        session, req.solver_par_file or (ref_solver.par_file if ref_solver else None),
-        req.solver_par_id or (ref_solver.par_id if ref_solver else None) or powsybl_solver,
+        session, solver_source, req.solver_par_id or (ref_solver.par_id if ref_solver else None) or powsybl_solver,
         "solver", "Solver",
     )
 
@@ -587,8 +589,9 @@ def post_generate(req: GenerateRequest, session: UserSession = Depends(get_sessi
         "model_category": {r["model"]: catalogue_models[r["model"]] for r in rules if r["model"] in catalogue_models},
         "iidm": iidm_name,
         "models_par": names["models.par"],
-        "network_par": names["network.par"], "network_id": network_id,
+        "network_par": names["network.par"], "network_id": network_id, "network_source": network_source,
         "solver_type": powsybl_solver, "solver_par": names["solvers.par"], "solver_id": solver_id,
+        "solver_source": solver_source,
         "start": start_time, "stop": stop_time,
         "dynawo_version": dynawo_version,
         "additional_models": additional,
@@ -610,15 +613,27 @@ def post_generate(req: GenerateRequest, session: UserSession = Depends(get_sessi
 
 @router.get("/script")
 def get_script(session: UserSession = Depends(get_session)):
-    """Last generation as a standalone pypowsybl script."""
-    if session.association_last_generation is None:
+    """Last generation as a zipped folder: a standalone pypowsybl script with
+    the network, the user's .par files the rules use (and the sets filled in
+    the GUI), the PowSyBl config.yml for the selected Dynawo, the models added
+    in the GUI and a README."""
+    generation = session.association_last_generation
+    if generation is None:
         raise HTTPException(status_code=404, detail="Nothing generated yet: generate the association first")
     network = _network(session)
+
+    def read(name: str) -> bytes:
+        if not session.session_manager.has_file(name):
+            raise HTTPException(status_code=409, detail=f"'{name}' is no longer in the session: generate again")
+        return _read(session, name)
+
+    selected = _selected_dynawo(session)
     with pypowsybl_slot():
-        script = build_script(session.association_last_generation, network)
+        content = build_export(generation, network, read, os.path.dirname(selected[0]) if selected else None,
+                               pypowsybl.__version__)
     return Response(
-        content=script, media_type="text/x-python",
-        headers={"Content-Disposition": 'attachment; filename="dynamic_association.py"'},
+        content=content, media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="dynamic_association.zip"'},
     )
 
 
