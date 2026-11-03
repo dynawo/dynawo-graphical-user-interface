@@ -615,8 +615,8 @@ def post_generate(req: GenerateRequest, session: UserSession = Depends(get_sessi
 def get_script(session: UserSession = Depends(get_session)):
     """Last generation as a zipped folder: a standalone pypowsybl script with
     the network, the user's .par files the rules use (and the sets filled in
-    the GUI), the PowSyBl config.yml for the selected Dynawo, the models added
-    in the GUI and a README."""
+    the GUI), the models added in the GUI and a README. The script runs the
+    selected Dynawo by default, upgrading the job to its version."""
     generation = session.association_last_generation
     if generation is None:
         raise HTTPException(status_code=404, detail="Nothing generated yet: generate the association first")
@@ -629,8 +629,7 @@ def get_script(session: UserSession = Depends(get_session)):
 
     selected = _selected_dynawo(session)
     with pypowsybl_slot():
-        content = build_export(generation, network, read, os.path.dirname(selected[0]) if selected else None,
-                               pypowsybl.__version__)
+        content = build_export(generation, network, read, selected[0] if selected else None, pypowsybl.__version__)
     return Response(
         content=content, media_type="application/zip",
         headers={"Content-Disposition": 'attachment; filename="dynamic_association.zip"'},
