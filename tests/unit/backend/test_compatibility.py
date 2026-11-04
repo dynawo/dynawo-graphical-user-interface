@@ -110,6 +110,28 @@ def test_update_tool_output_and_tickets_are_collected(case, tmp_path):
     assert result["tickets"] == ["4223"]
 
 
+@pytest.mark.skipif(os.name == "nt", reason="the Python without imp is a shell script")
+def test_update_tool_using_imp_runs_on_a_python_without_it(case, tmp_path):
+    """Dynawo 1.7's update tool imports imp, which Python 3.12 removed."""
+    tool = find_update_tool(make_fake_dynawo(tmp_path / "dynawo"))
+    (tmp_path / "step.py").write_text("STEP = 1\n")
+    with open(tool) as fh:
+        body = fh.read()
+    with open(tool, "w") as fh:
+        fh.write(f"import imp\nassert imp.load_source('step', {str(tmp_path / 'step.py')!r}).STEP == 1\n" + body)
+    blocker = tmp_path / "blocker"
+    blocker.mkdir()
+    (blocker / "imp.py").write_text("raise ModuleNotFoundError(\"No module named 'imp'\")\n")
+    python = tmp_path / "python"
+    python.write_text(f'#!/bin/sh\nPYTHONPATH="${{PYTHONPATH:+$PYTHONPATH:}}{blocker}" exec {sys.executable} "$@"\n')
+    os.chmod(python, 0o755)
+
+    result = run_update(tool, str(python), os.path.join(case, "case.jobs"), FULL_UPGRADE_ORIGIN, "2.0.0",
+                        str(tmp_path / "out"))
+
+    assert result["tickets"] == ["4223"]
+
+
 def test_update_tool_failure_is_raised(case, tmp_path):
     tool = find_update_tool(make_fake_dynawo(tmp_path / "dynawo"))
 

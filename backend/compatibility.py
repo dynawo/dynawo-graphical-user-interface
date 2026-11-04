@@ -310,14 +310,41 @@ def tool_versions(tool: str) -> list[str]:
     return sorted(versions, key=version_tuple)
 
 
+# Dynawo's update tool before 1.8.0 loads its scripts with imp.load_source;
+# Python 3.12 removed imp. This module gives it back to such a Python.
+_IMP_SHIM = '''import importlib.machinery, importlib.util, sys
+
+
+def load_source(name, pathname, file=None):
+    loader = importlib.machinery.SourceFileLoader(name, pathname)
+    spec = importlib.util.spec_from_file_location(name, pathname, loader=loader)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    loader.exec_module(module)
+    return module
+'''
+
+
+def imp_shim(python: str, folder: str) -> dict:
+    """Environment giving update.py the imp module, written in `folder`, when
+    `python` lacks it; empty otherwise."""
+    if subprocess.run([python, "-c", "import imp"], capture_output=True).returncode == 0:
+        return {}
+    with open(os.path.join(folder, "imp.py"), "w", encoding="utf-8") as fh:
+        fh.write(_IMP_SHIM)
+    return {"PYTHONPATH": os.pathsep.join(filter(None, [folder, os.environ.get("PYTHONPATH")]))}
+
+
 def run_update(tool: str, python: str, jobs_path: str, origin: str, target: str, out_dir: str) -> dict:
     """Run update.py; returns {files: {name: path}, tickets: [...], output: str}.
     Raises RuntimeError on failure."""
-    proc = subprocess.run(
-        [python, tool, "--job", jobs_path, "--origin", origin, "--version", target, "-o", out_dir, "--log"],
-        cwd=os.path.dirname(tool), capture_output=True, text=True, timeout=600,
-        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},  # nothing written into the Dynawo tree
-    )
+    with tempfile.TemporaryDirectory() as shim_dir:
+        proc = subprocess.run(
+            [python, tool, "--job", jobs_path, "--origin", origin, "--version", target, "-o", out_dir, "--log"],
+            cwd=os.path.dirname(tool), capture_output=True, text=True, timeout=600,
+            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1",  # nothing written into the Dynawo tree
+                 **imp_shim(python, shim_dir)},
+        )
     produced = glob.glob(os.path.join(out_dir, "*", "*"))
     if proc.returncode != 0 or not produced:
         raise RuntimeError((proc.stdout + proc.stderr).strip()[-2000:] or f"update.py exited with {proc.returncode}")
