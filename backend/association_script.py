@@ -166,8 +166,8 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--dynawo", default=DYNAWO,
                         help="dynawo.sh (dynawo.cmd on Windows) of the Dynawo running the job (default: %(default)s)")
     parser.add_argument("--dynawo-version", help="Dynawo version to upgrade the job to (default: that of --dynawo)")
-    parser.add_argument("--update-tool", help="Dynawo's updateXML/update.py (default: the most recent found in "
-                                              "sbin/updateXML of --dynawo, $DYNAWO_HOME, the GUI's configuration)")
+    parser.add_argument("--update-tool", help="Dynawo's updateXML/update.py (default: the one in "
+                                              "sbin/updateXML of --dynawo)")
     parser.add_argument("--no-update", action="store_true",
                         help=f"run the job as PowSyBl writes it, for Dynawo {numeric_version(WRITE_VERSION)}")
     parser.add_argument("--write-only", action="store_true", help="write (and upgrade) the job without running it")
@@ -269,7 +269,7 @@ def upgrade(jobs: str, target: str | None, args: argparse.Namespace) -> str:
     python = update_python()
     if not tool or not python:
         why = ("the update tool needs a Python with lxml (pip install lxml)" if tool
-               else "Dynawo's update tool (updateXML/update.py) was not found (see --update-tool)")
+               else "the Dynawo has no update tool, sbin/updateXML/update.py (see --update-tool)")
         print(f"job not upgraded to Dynawo {target}: {why}")
         return jobs
     folder = os.path.join(os.path.dirname(jobs), f"dynawo{target}")
@@ -334,11 +334,9 @@ Exported from the Dynawo GUI on {date}, for Dynawo {dynawo_version}.
 - A **Dynawo** install: its `dynawo.sh` (`dynawo.cmd` on Windows) is
   `{dynawo}` by default, else give it with `--dynawo`.
 - For the upgrade, Dynawo's **update tool** (`updateXML/update.py`) and
-  **lxml** in the Python running the script (`pip install lxml`). The most
-  recent tool found is used, in `sbin/updateXML` of the Dynawo, in
-  `$DYNAWO_HOME` (`sbin/` or `util/`), or in the GUI's configuration
-  (`~/.config/dynawo_ihm/updateXML`); `--update-tool` gives another. Without
-  it, the job runs as written, which suits Dynawo {write_version}.
+  **lxml** in the Python running the script (`pip install lxml`). The tool
+  in `sbin/updateXML` of the Dynawo is used; `--update-tool` gives another.
+  Without it, the job runs as written, which suits Dynawo {write_version}.
 - A path **without spaces** to this folder (GraalVM, pypowsybl's Java side,
   cannot take them in its options).
 
@@ -457,7 +455,6 @@ def _constants(generation: dict, iidm: str, par_files: list[str], network: tuple
         f"_VOLTAGE_LEVEL_ATTRIBUTES = {association_rules._VOLTAGE_LEVEL_ATTRIBUTES!r}",
         f"_FILE_ATTRIBUTES = {compatibility._FILE_ATTRIBUTES!r}",
         f"FULL_UPGRADE_ORIGIN = {compatibility.FULL_UPGRADE_ORIGIN!r}",
-        'APP_UPDATE_TOOL = os.path.join(os.path.expanduser("~"), ".config", "dynawo_ihm", "updateXML", "update.py")',
         "",
     ])
 
@@ -465,8 +462,8 @@ def _constants(generation: dict, iidm: str, par_files: list[str], network: tuple
 def _functions() -> str:
     """App functions the script runs as they are."""
     functions = [element_table, association_par.for_powsybl, association_par.set_ids, association_par._unique,
-                 _Assembler, association_par.assemble_par, numeric_version, compatibility.version_tuple,
-                 compatibility.update_tool_places, compatibility.latest_script, compatibility.find_update_tool,
+                 _Assembler, association_par.assemble_par, numeric_version,
+                 compatibility.update_tool_place, compatibility.find_update_tool,
                  compatibility.update_python, compatibility.run_update, compatibility.relink]
     return "".join("\n\n" + inspect.getsource(f) for f in functions)
 

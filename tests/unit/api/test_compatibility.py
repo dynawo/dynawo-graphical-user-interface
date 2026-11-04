@@ -19,10 +19,8 @@ JOB = {"jobs_file": "case.jobs"}
 
 
 @pytest.fixture
-def dynawo(tmp_path, monkeypatch) -> str:
-    """The fake Dynawo 2.0.0, its update tool the only one found."""
-    monkeypatch.delenv("DYNAWO_HOME", raising=False)
-    monkeypatch.setattr(compatibility, "APP_UPDATE_TOOL", str(tmp_path / "app" / "updateXML" / "update.py"))
+def dynawo(tmp_path) -> str:
+    """The fake Dynawo 2.0.0, with its update tool."""
     compatibility._desc_cache.clear()
     return make_fake_dynawo(tmp_path / "dynawo")
 
@@ -67,7 +65,8 @@ def test_without_update_tool_the_check_says_so_and_upgrade_is_refused(case, clie
 
     context = client.get("/api/compatibility/context", params=JOB).json()
     assert context["update_tool"] is False
-    assert context["update_tool_missing"].startswith("Dynawo's update tool (updateXML/update.py) was not found in:")
+    assert context["update_tool_missing"] == ("the selected Dynawo has no update tool "
+                                              f"({tmp_path / 'dynawo' / 'sbin' / 'updateXML' / 'update.py'} not found)")
     assert client.post("/api/compatibility/check", json=JOB).json()["versions"] == "no_tool"
     assert client.post("/api/compatibility/upgrade", json=JOB).status_code == 400
 

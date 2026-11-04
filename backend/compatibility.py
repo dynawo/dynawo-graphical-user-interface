@@ -275,18 +275,9 @@ def check_job(session_dir: str, jobs_name: str, exe: str) -> dict:
 # remove, or add only what is missing; none converts a value).
 FULL_UPGRADE_ORIGIN = "0.0.0"
 
-APP_UPDATE_TOOL = os.path.join(os.path.expanduser("~"), ".config", "dynawo_ihm", "updateXML", "update.py")
-
-
-def update_tool_places(exe: str) -> list[str]:
-    """Where Dynawo's update.py is looked for, in order: the distribution
-    (sbin/updateXML), $DYNAWO_HOME (what dynawo.sh update-xml uses; util/ in a
-    source tree), the app's config directory."""
-    places = [os.path.join(os.path.dirname(exe), "sbin", "updateXML", "update.py")]
-    home = os.environ.get("DYNAWO_HOME")
-    if home:
-        places += [os.path.join(home, d, "updateXML", "update.py") for d in ("sbin", "util")]
-    return places + [APP_UPDATE_TOOL]
+def update_tool_place(exe: str) -> str:
+    """Where Dynawo's update.py is: in the distribution, sbin/updateXML."""
+    return os.path.join(os.path.dirname(exe), "sbin", "updateXML", "update.py")
 
 
 def latest_script(tool: str) -> str | None:
@@ -297,10 +288,10 @@ def latest_script(tool: str) -> str | None:
 
 
 def find_update_tool(exe: str) -> str | None:
-    """The most recent update tool among those found (an older one cannot
-    produce what a newer Dynawo expects); the first found on a tie."""
-    found = [p for p in update_tool_places(exe) if os.path.isfile(p)]
-    return max(found, key=lambda p: version_tuple(latest_script(p) or "0"), default=None)
+    """The update tool shipped with the Dynawo, which fits its version; None
+    without one (no other is used)."""
+    tool = update_tool_place(exe)
+    return tool if os.path.isfile(tool) else None
 
 
 def update_python() -> str | None:

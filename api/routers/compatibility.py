@@ -26,7 +26,7 @@ from backend.compatibility import (
     migration_changes,
     relink,
     run_update,
-    update_tool_places,
+    update_tool_place,
     update_python,
 )
 from backend.user_config import load_user_config
@@ -67,8 +67,7 @@ def _tool_missing(exe: str) -> str:
     """Why the update tool cannot be used, and where it is looked for."""
     if find_update_tool(exe):
         return "the update tool needs a Python with lxml (pip install lxml)"
-    places = ", ".join(os.path.dirname(p) for p in update_tool_places(exe))
-    return f"Dynawo's update tool (updateXML/update.py) was not found in: {places}"
+    return f"the selected Dynawo has no update tool ({update_tool_place(exe)} not found)"
 
 
 @router.get("/context")

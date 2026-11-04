@@ -25,17 +25,14 @@ from backend.compatibility import (
     run_update,
     scan_par_sets,
     tool_versions,
-    update_tool_places,
+    update_tool_place,
     version_tuple,
 )
 from tests.fake_dynawo import make_fake_dynawo
 
 
 @pytest.fixture(autouse=True)
-def no_installed_tool(tmp_path, monkeypatch):
-    """Only the fake Dynawo's update tool is found: not the developer's."""
-    monkeypatch.delenv("DYNAWO_HOME", raising=False)
-    monkeypatch.setattr(compatibility, "APP_UPDATE_TOOL", str(tmp_path / "app" / "updateXML" / "update.py"))
+def clear_desc_cache():
     compatibility._desc_cache.clear()
 
 
@@ -86,18 +83,17 @@ def test_versions_compare_as_numbers():
     assert version_tuple("2.0.0 (rev:master-6e26b2b)")[:3] == (2, 0, 0)
 
 
-def test_most_recent_update_tool_is_used(tmp_path, monkeypatch):
+def test_only_the_dynawo_own_update_tool_is_used(tmp_path, monkeypatch):
     old = make_fake_dynawo(tmp_path / "old", scripts=("1.7.0.8", "1.7.0.9"))
     home = make_fake_dynawo(tmp_path / "home", scripts=("1.8.0.16", "2.0.0.2"))
     monkeypatch.setenv("DYNAWO_HOME", str(tmp_path / "home"))
 
     tool = find_update_tool(old)
 
-    assert tool == str(tmp_path / "home" / "sbin" / "updateXML" / "update.py")
-    assert latest_script(tool) == "2.0.0.2"
-    assert tool_versions(tool) == ["1.8.0", "2.0.0"]
-    assert update_tool_places(old)[0] == str(tmp_path / "old" / "sbin" / "updateXML" / "update.py")
-    assert find_update_tool(str(tmp_path / "nowhere" / "dynawo.sh")) == str(tmp_path / "home" / "sbin" / "updateXML" / "update.py")
+    assert tool == update_tool_place(old) == str(tmp_path / "old" / "sbin" / "updateXML" / "update.py")
+    assert latest_script(tool) == "1.7.0.9"
+    assert tool_versions(find_update_tool(home)) == ["1.8.0", "2.0.0"]
+    assert find_update_tool(str(tmp_path / "nowhere" / "dynawo.sh")) is None
 
 
 def test_no_update_tool_found(tmp_path):
