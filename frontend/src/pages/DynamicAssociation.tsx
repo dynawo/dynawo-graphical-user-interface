@@ -345,7 +345,7 @@ function RuleCard({ rule, index, count, report, elementTypes, attributes, notCon
             <Input style={{ width: fitWidth(rule.parameter_set_id || rule.model, 20), maxWidth: '100%' }}
               placeholder={rule.model || 'set name'} value={rule.parameter_set_id}
               onChange={e => onChange({ ...rule, parameter_set_id: e.target.value })} />
-            <Text type="secondary">created empty, to fill in Edit Parameters after generating</Text>
+            <Text type="secondary">created with the parameters the model needs, to fill in Edit Parameters after generating</Text>
           </>)}
         </Space>
 
