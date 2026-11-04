@@ -107,13 +107,16 @@ pages in workflow order:
   \item \textbf{Network View} --- explore the grid topology
   \item \textbf{Load Flow / DynaFlow} --- run a steady-state load flow
     (OpenLoadFlow or DynaFlow) and optionally an N-1 security analysis
-  \item \textbf{Edit Parameters} --- modify dynamic model parameters
+  \item \textbf{Dynamic Association} --- put dynamic models on the network
+    elements with rules, and generate the Dynawo job with PowSyBl
+  \item \textbf{Edit Parameters} --- modify dynamic model and network parameters
   \item \textbf{Edit Solver Parameters} --- modify solver parameters
   \item \textbf{Edit Curves} --- define which model variables Dynawo will export
     to \code{curves.csv}
   \item \textbf{Events} --- apply events to the case during the simulation
-  \item \textbf{Run Simulation} --- configure, launch, and compare simulations
-  \item \textbf{About} --- workflow overview
+  \item \textbf{Run Simulation} --- check a job against the selected Dynawo,
+    upgrade it, then launch and compare simulations
+  \item \textbf{About} --- what the GUI does, page by page
 \end{enumerate}
 
 Each browser tab gets its own isolated workspace (session). Sessions are
@@ -274,6 +277,7 @@ who do not develop the application, and the only supported one on Windows.
 
 % ═════════════════════════════════════════════════════════════════════════════
 \section{Session management}
+\label{sec:session}
 
 Each browser tab automatically receives its own isolated session when it first
 connects. The session holds all uploaded files, the network object, the Dynawo
@@ -747,7 +751,167 @@ A separate row at the top shows the pre-contingency (N) state with the same
 fields.
 
 % ═════════════════════════════════════════════════════════════════════════════
-\section{Page 5 --- Edit Dynamic Models Parameters}
+\section{Page 5 --- Dynamic Association}
+\label{sec:dynassoc}
+
+This page builds the dynamic models of a case from its network: rules put a
+model and a parameter set on the network elements, then PowSyBl (pypowsybl)
+writes the Dynawo job --- \ftype{jobs}, \ftype{dyd} and \ftype{par} files ---
+into the session. Requires a loaded network (\ftype{iidm}, page~2); generating
+also requires a selected Dynawo (page~1), whose version decides what PowSyBl
+writes.
+
+\subsection{Rules}
+
+Click \textbf{Add rule}, then set:
+
+\begin{description}[leftmargin=2em]
+  \item[\textbf{Elements}] The element type: generators, loads, lines,
+    two-winding transformers, shunts, static var compensators, HVDC lines or
+    buses.
+  \item[\textbf{Conditions}] Optional filters on the element attributes, all
+    of which must hold. Besides pypowsybl's attributes (\code{p0},
+    \code{energy\_source}, \code{connected}\ldots), each element has those of
+    its voltage level: \code{nominal\_v}, \code{substation\_id},
+    \code{country} (with the side, e.g.\ \code{nominal\_v1}, for branches).
+    Operators: $=$, $\neq$, $<$, $\le$, $>$, $\ge$, \textbf{in} (a list of
+    values) and \textbf{matches} (a regular expression). Without condition, the
+    rule applies to every element of the type.
+  \item[\textbf{Model}] The models fitting the element type come first. A model
+    not in the ddb of the selected Dynawo is marked unavailable.
+  \item[\textbf{Parameters}] \textbf{From a .par file} (a file and one of its
+    sets) or \textbf{Fill manually} (a set name). A manual set is created at
+    generation with the parameters the model needs --- those of its
+    \code{.desc.xml} that are neither read-only nor given a default value ---
+    left empty, to fill in \textbf{Edit Parameters}. \textbf{Generic} stays
+    greyed out until the generic parameters file is available.
+\end{description}
+
+Rules apply in order: when several rules select the same element, \textbf{the
+later rule wins}. Each rule can be moved up or down, duplicated or removed; a
+rule folds into a one-line summary, and rules are shown 20 per page. Rules and
+settings are kept with the session.
+
+\paragraph{Automation systems.} The \emph{Automation systems on \ldots} group of
+the model list adds one automation system per selected element, named
+\code{<prefix>\_<element id>}, alongside the element's own model:
+
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+Automation system & Elements & Needs on the element \\
+\midrule
+Tap changer & loads & a load model with transformer(s), per \textbf{side} \\
+Under-voltage & generators & a generator model other than the default \\
+Phase shifter (I or P) & transformers & a phase tap changer \\
+Overload management & lines, transformers & --- (\textbf{measured side}) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{warnbox}
+A \textbf{Line}, \textbf{Transformer}, \textbf{Bus} or \textbf{InfiniteBus}
+model makes PowSyBl model the whole network: every line, two-winding
+transformer and bus then needs a dynamic model, otherwise generation fails.
+The preview lists those still without one.
+\end{warnbox}
+
+\paragraph{Add a model\ldots} Next to the model list, adds a library of the
+selected Dynawo that pypowsybl does not know. Only the libraries fitting the
+category are offered (same variables and parameters as its built-in models).
+The model is kept \textbf{for this session} or \textbf{for all sessions}, for
+that Dynawo version only.
+
+\subsection{Preview}
+
+Updated as the rules change, without generating:
+
+\begin{itemize}[leftmargin=2em]
+  \item per rule, the elements it selects and those it keeps, with its errors
+    (the rule is then skipped) and warnings: elements not connected, a model
+    not made for the element type, an automation system missing what it needs;
+  \item per element type, the elements with and without a dynamic model
+    (without one, Dynawo uses its default network model);
+  \item per model, its number of elements.
+\end{itemize}
+
+\subsection{Saving, loading and importing rules}
+
+\begin{description}[leftmargin=2em]
+  \item[\textbf{Save rules\ldots}] Saves the rules and the generation settings
+    under a name, to use them again in any session. They are kept in
+    \code{\textasciitilde/.config/dynawo\_ihm/association\_rules/}.
+  \item[\textbf{Load rules\ldots}] \textbf{Load} replaces the current rules
+    and settings; \textbf{Add} appends the rules.
+  \item[\textbf{Import from a .dyd\ldots}] Rebuilds rules giving the models of
+    a \ftype{dyd} of the session on the loaded network: one rule for a whole
+    element type when all its elements share a model, the others by id;
+    automation systems are found from their connections. The report lists the
+    models rules cannot express, with the reason (frequency models, events,
+    composite models\ldots), and any difference between the rules and the
+    \ftype{dyd}. \textbf{Add} or \textbf{Replace rules}.
+\end{description}
+
+\subsection{Generating the job}
+
+\begin{description}[leftmargin=2em]
+  \item[\textbf{Reference job}] A \ftype{jobs} of the session (by default the
+    only one): the network and solver parameters, the time window and the
+    outputs are taken from it.
+  \item[\textbf{Network and solver parameters, time window}] Overrides the
+    reference job: a \ftype{par} file and set for the network and for the
+    solver (IDA or SIM), start and stop times. A set without file is created
+    with the parameters of \code{DYNModelNetwork} or of the solver library,
+    to fill.
+\end{description}
+
+Click \textbf{Generate}. The files are added to the session as
+\code{dynamic\_association.jobs}, \code{.dyd} and \code{\_models.par},
+\code{\_network.par}, \code{\_solvers.par}; generating again replaces them and
+keeps the manual sets already filled. The result shows:
+
+\begin{itemize}[leftmargin=2em]
+  \item the parameter sets to fill, with a link to the page editing each.
+    When PowSyBl itself needs a value of such a set (e.g.\
+    \code{generator\_H}), it writes the job with a placeholder: generate again
+    once the set is filled;
+  \item the models PowSyBl left out of the job, with the reason from its
+    report.
+\end{itemize}
+
+\begin{notebox}
+PowSyBl writes the job in the naming of the Dynawo versions it supports. For a
+more recent Dynawo, upgrade the job before running it
+(Section~\ref{sec:compatibility}).
+\end{notebox}
+
+\subsection{Exporting a Python script}
+
+\textbf{Export as Python script} downloads the last generation as a folder
+(zip) to run outside the GUI: \code{dynamic\_association.py}, the network, the
+user's \ftype{par} files the rules use (the sets filled in the GUI go to
+\code{manual\_sets.par}), the added models and a \code{README.md}. The script
+needs pypowsybl, and \code{lxml} for the upgrade:
+
+\begin{lstlisting}
+python dynamic_association.py
+python dynamic_association.py --network other.iidm --stop-time 50
+python dynamic_association.py --dynawo /path/to/dynawo.sh
+python dynamic_association.py --help
+\end{lstlisting}
+
+It applies the rules as the GUI does (to another network too: conditions on
+attributes select its own elements), writes the job with PowSyBl, upgrades it
+with Dynawo's update tool to the version of the Dynawo running it, then runs
+it. Each run is kept in \code{runs/} of the folder. The main options:
+\code{-{}-network}, \code{-{}-par-dir} and \code{-{}-par NAME=PATH} (other
+\ftype{par} files), \code{-{}-network-par}/\code{-{}-network-par-id} and
+\code{-{}-solver-par}/\code{-{}-solver-par-id}, \code{-{}-dynawo},
+\code{-{}-no-update}, \code{-{}-write-only} (write and upgrade, without running).
+The folder path must not contain spaces.
+
+% ═════════════════════════════════════════════════════════════════════════════
+\section{Page 6 --- Edit Dynamic Models Parameters}
 \label{sec:editparams}
 
 Requires a \ftype{dyd} file and at least one \ftype{par} file.
@@ -755,7 +919,8 @@ Requires a \ftype{dyd} file and at least one \ftype{par} file.
 \subsection{Selecting a model}
 
 All \code{blackBoxModel} entries from the \ftype{dyd} file are listed in a
-dropdown.
+dropdown, followed by the network parameters of each job, as
+\code{NETWORK [\textit{job}.jobs]}.
 
 \begin{warnbox}
 \textbf{Shared parameter sets.} If multiple models share the same PAR file and
@@ -767,7 +932,25 @@ parameter set ID, editing one will affect all.
 Each parameter row shows its name, type (\code{BOOL}, \code{INT},
 \code{DOUBLE}), current value, and an appropriate input widget. Click
 \textbf{Apply changes} to write the new values to disk; changed rows are
-highlighted in amber until the operation is confirmed.
+highlighted in amber until the operation is confirmed. Parameters still without
+value, as in the sets created by the Dynamic Association page
+(Section~\ref{sec:dynassoc}), show \emph{to fill}.
+
+\subsection{IIDM references}
+
+A parameter can be read from the network instead of given a value: Dynawo then
+takes it, at initialisation, from the IIDM data of the model's element (e.g.\
+\code{generator\_P0Pu} from \code{p\_pu}). Click the link icon of the
+parameter, choose the IIDM data (\code{origName}) and click \textbf{Use
+reference}. The IIDM data is suggested from the references of the session's
+\ftype{par} files, else from Dynawo's naming (\code{\ldots P0Pu} $\to$
+\code{p\_pu}, \code{\ldots Q0Pu} $\to$ \code{q\_pu}, \code{\ldots U0Pu}
+$\to$ \code{v\_pu}, \code{\ldots UPhase0} $\to$ \code{angle\_pu}). When
+parameters without value have a suggestion, a banner offers \textbf{Use these
+references} for all of them. In the \emph{IIDM references} table,
+\textbf{Give a value instead} turns a reference back into a parameter to fill.
+Parameters shared through a macro set, and network parameters, cannot be turned
+into references.
 
 \subsection{Change log}
 
@@ -800,10 +983,11 @@ disappears as soon as the file matches the original --- regardless of log state.
 \end{notebox}
 
 % ═════════════════════════════════════════════════════════════════════════════
-\section{Page 6 --- Edit Solver Parameters}
+\section{Page 7 --- Edit Solver Parameters}
 
 Targets the solver defined in the \code{<solver>} element of the \ftype{jobs}
-file. The interface is identical to Section~\ref{sec:editparams}: the same
+file; with several jobs in the session, choose it in \textbf{Job}. The
+interface is identical to Section~\ref{sec:editparams}: the same
 parameter table, change log, per-entry \textbf{Revert}, and
 \textbf{Restore original} banner.
 
@@ -811,7 +995,7 @@ The solver uses a separate change log from the dynamic-model parameters, so
 both logs can be managed independently.
 
 % ═════════════════════════════════════════════════════════════════════════════
-\section{Page 7 --- Edit Curves}
+\section{Page 8 --- Edit Curves}
 \label{sec:editcurves}
 
 This page manages the \ftype{crv} file that tells Dynawo which model output
@@ -909,7 +1093,7 @@ Clicking it overwrites the file with the originally uploaded bytes and clears
 the change log.
 
 % ═════════════════════════════════════════════════════════════════════════════
-\section{Page 8 --- Events}
+\section{Page 9 --- Events}
 \label{sec:events}
 
 This page builds the events of a study as a \ftype{dyd} file with its
@@ -1069,7 +1253,7 @@ the event one. Write \code{switchOff2}.
 \end{warnbox}
 
 % ═════════════════════════════════════════════════════════════════════════════
-\section{Page 9 --- Run Simulation}
+\section{Page 10 --- Run Simulation}
 \label{sec:runsim}
 
 Requires a \ftype{jobs} file and a configured Dynawo executable.
@@ -1082,6 +1266,36 @@ Requires a \ftype{jobs} file and a configured Dynawo executable.
   \item[\textbf{Base output directory}] The suffix \code{\_run\textit{N}} is
     appended automatically before each run.
 \end{description}
+
+\subsection{Compatibility with the selected Dynawo}
+\label{sec:compatibility}
+
+The \emph{Compatibility with Dynawo \textit{x.y.z}} card checks the selected
+job against the selected Dynawo, without running it:
+
+\begin{description}[leftmargin=2em]
+  \item[\textbf{Check}] Compares the job's files with the Dynawo's model
+    database (ddb): missing files, parameter sets or solver library, libraries
+    absent from the ddb and variables they do not declare (errors), parameters
+    they do not declare (warnings). It then tells which files Dynawo's updates
+    up to that version would change: such files were written for an older
+    Dynawo.
+  \item[\textbf{Upgrade to Dynawo \textit{x.y.z}}] Applies all of Dynawo's
+    updates up to that version, with Dynawo's own update tool. The upgraded
+    files go to a new folder, \code{\textit{job}\_dynawo\textit{x.y.z}/},
+    whose job is selected; the original files are unchanged. Files already in
+    that version's format are left as they are.
+\end{description}
+
+The update tool is the one shipped with the selected Dynawo,
+\code{sbin/updateXML/update.py}, and needs \code{lxml}. If the Dynawo has
+none, the card says the upgrade is not available.
+
+\begin{notebox}
+A job generated by the Dynamic Association page is written for the Dynawo
+versions PowSyBl supports: with a more recent Dynawo (e.g.\ master), upgrade it
+before running it.
+\end{notebox}
 
 \subsection{Running a simulation}
 
@@ -1155,7 +1369,17 @@ hover label lists every trace of the plot under the cursor at that time step.
 The chart grows taller as plots are added.
 
 % ═════════════════════════════════════════════════════════════════════════════
+\section{Page 11 --- About}
+
+A one-page overview of the GUI: what each page does, in workflow order (the
+order of Section~\ref{sec:workflow}), the two ways to start a study --- from
+an existing Dynawo case, or from a network alone, whose dynamic models
+\textbf{Dynamic Association} then builds --- and how sessions work
+(Section~\ref{sec:session}).
+
+% ═════════════════════════════════════════════════════════════════════════════
 \section{Typical workflow}
+\label{sec:workflow}
 
 \begin{enumerate}[leftmargin=2em]
   \item \textbf{Dynawo Version} --- configure or download the Dynawo executable.
@@ -1169,22 +1393,29 @@ The chart grows taller as plots are added.
     (Section~\ref{sec:dynaflowlauncher}). The result \ftype{xiidm} appears
     automatically in the \textbf{Network View} final-state picker. Skip this
     step if the uploaded case already includes a converged network state.
+  \item \textbf{Dynamic Association} (\emph{optional}) --- when the case has
+    no dynamic models yet (only an \ftype{iidm}), define rules and click
+    \textbf{Generate}; fill the parameter sets it lists in \textbf{Edit
+    Parameters} and \textbf{Edit Solver Parameters}
+    (Section~\ref{sec:dynassoc}).
   \item \textbf{Edit Curves} --- define which variables to export. If the
-    uploaded case already includes a \ftype{crv} file, skip to step~5.
+    uploaded case already includes a \ftype{crv} file, skip to step~6.
     Otherwise click \textbf{Create}, then select the desired variables using
     the catalogue picker or the \textbf{Select all variables} button, and
     click \textbf{Apply changes} (Section~\ref{sec:editcurves}).
   \item \textbf{Events} (\emph{optional}) --- add the events of the study and
     save them into their own \ftype{dyd} file, declared in the job
     (Section~\ref{sec:events}).
-  \item \textbf{Run Simulation} --- run a first simulation (\emph{Run~1}).
-    The network is loaded automatically when you first visit \textbf{Network
-    View}.
+  \item \textbf{Run Simulation} --- \textbf{Check} the job, and
+    \textbf{Upgrade} it if its files are older than the selected Dynawo
+    (Section~\ref{sec:compatibility}); then run a first simulation
+    (\emph{Run~1}). The network is loaded automatically when you first visit
+    \textbf{Network View}.
   \item \textbf{Edit Parameters} / \textbf{Edit Solver Parameters} --- adjust
     parameters.
   \item \textbf{Run Simulation} --- run a second simulation (\emph{Run~2}).
   \item Compare curves for both runs. Rename runs to meaningful labels.
-  \item Repeat steps~6--8 as needed.
+  \item Repeat steps~8--10 as needed.
 \end{enumerate}
 
 % ═════════════════════════════════════════════════════════════════════════════

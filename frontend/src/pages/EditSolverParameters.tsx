@@ -9,16 +9,18 @@
 //
 
 import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
-  Alert, Button, Card, Checkbox, Collapse, Input,
+  Alert, Button, Card, Checkbox, Collapse, Input, Select,
   Space, Table, Tag, Typography,
 } from 'antd'
 import { RedoOutlined, RollbackOutlined, SaveOutlined } from '@ant-design/icons'
 import client from '../api/client'
+import { valuesEqual } from './parValues'
 
 const { Title, Text } = Typography
 
-interface SolverInfo { lib: string; parFile: string; parId: string }
+interface SolverInfo { jobs_file: string; lib: string; parFile: string; parId: string }
 interface Par { name: string; type: string; value: string }
 interface Ref { name: string; origData: string; origName: string }
 interface Change { name: string; old_value: string; new_value: string }
@@ -29,17 +31,12 @@ interface SolverDetail extends SolverInfo {
   refs: Ref[]
 }
 
-function valuesEqual(fileVal: string, widgetVal: string, type: string): boolean {
-  try {
-    if (type === 'BOOL') return fileVal.trim().toLowerCase() === widgetVal.trim().toLowerCase()
-    if (type === 'INT') return parseInt(fileVal) === parseInt(widgetVal)
-    return parseFloat(fileVal) === parseFloat(widgetVal)
-  } catch {
-    return fileVal === widgetVal
-  }
-}
-
 export default function EditSolverParameters() {
+  // The job whose solver is edited: from the link (?jobs=), else the first one.
+  const [searchParams] = useSearchParams()
+  const [jobs, setJobs] = useState<string[]>([])
+  const [jobsFile, setJobsFile] = useState<string | null>(searchParams.get('jobs'))
+  const params = jobsFile ? { jobs_file: jobsFile } : undefined
   const [detail, setDetail] = useState<SolverDetail | null>(null)
   const [formVals, setFormVals] = useState<Record<string, string>>({})
   const [changelog, setChangelog] = useState<LogEntry[]>([])
@@ -52,7 +49,7 @@ export default function EditSolverParameters() {
   const fetchDetail = async () => {
     try {
       setNotFound(null)
-      const res = await client.get<SolverDetail>('/solver/parameters')
+      const res = await client.get<SolverDetail>('/solver/parameters', { params })
       setDetail(res.data)
       const initial: Record<string, string> = {}
       for (const p of res.data.pars) initial[p.name] = p.value
@@ -73,14 +70,22 @@ export default function EditSolverParameters() {
 
   const fetchModified = async () => {
     try {
-      const res = await client.get<{ modified: boolean }>('/solver/is-modified')
+      const res = await client.get<{ modified: boolean }>('/solver/is-modified', { params })
       setIsModified(res.data.modified)
     } catch {
       setIsModified(false)
     }
   }
 
-  useEffect(() => { fetchDetail(); fetchChangelog(); fetchModified() }, [])
+  useEffect(() => {
+    client.get<string[]>('/solver/jobs').then(res => {
+      setJobs(res.data)
+      if (!jobsFile || !res.data.includes(jobsFile)) setJobsFile(res.data[0] ?? null)
+      if (!res.data.length) setNotFound('No .jobs file with a solver parameter set in the session')
+    }).catch(() => setJobs([]))
+    fetchChangelog()
+  }, [])
+  useEffect(() => { if (jobsFile) { fetchDetail(); fetchModified() } }, [jobsFile])
 
   const changed = detail
     ? detail.pars.some(p => !valuesEqual(p.value, formVals[p.name] ?? p.value, p.type))
@@ -91,7 +96,7 @@ export default function EditSolverParameters() {
     setError(null)
     setSuccess(null)
     try {
-      const res = await client.put<{ changed: number }>('/solver/parameters', { values: formVals })
+      const res = await client.put<{ changed: number }>('/solver/parameters', { values: formVals }, { params })
       await fetchDetail()
       await fetchChangelog()
       await fetchModified()
@@ -104,7 +109,7 @@ export default function EditSolverParameters() {
   }
 
   const handleRestore = async () => {
-    await client.post('/solver/restore')
+    await client.post('/solver/restore', null, { params })
     await fetchDetail()
     await fetchChangelog()
     await fetchModified()
@@ -141,6 +146,13 @@ export default function EditSolverParameters() {
         <>
           {/* ── Info card ── */}
           <Card style={{ marginBottom: 16 }}>
+            {jobs.length > 1 && (
+              <Space style={{ marginBottom: 8 }}>
+                <Text strong>Job</Text>
+                <Select value={jobsFile} onChange={setJobsFile} style={{ minWidth: 320 }}
+                        options={jobs.map(j => ({ value: j, label: j }))} />
+              </Space>
+            )}
             <Space wrap>
               <Tag color="purple">{detail.lib}</Tag>
               <Text type="secondary">Par file: <Text code>{detail.parFile}</Text></Text>
@@ -251,6 +263,8 @@ export default function EditSolverParameters() {
                       return (
                         <Input
                           value={val}
+                          placeholder={par.value ? undefined : 'to fill'}
+                          status={!val ? 'warning' : undefined}
                           style={{ width: '100%', borderColor: dirty ? '#faad14' : undefined }}
                           onChange={e => setFormVals(prev => ({ ...prev, [par.name]: e.target.value }))}
                         />

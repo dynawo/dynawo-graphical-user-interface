@@ -19,7 +19,8 @@ def _parse_pars_refs(elem) -> tuple[list[dict], list[dict]]:
         for p in elem.findall(f"{{{_NS}}}par")
     ]
     refs = [
-        {"name": r.get("name", ""), "origData": r.get("origData", ""), "origName": r.get("origName", "")}
+        {"name": r.get("name", ""), "type": r.get("type", ""), "origData": r.get("origData", ""),
+         "origName": r.get("origName", "")}
         for r in elem.findall(f"{{{_NS}}}reference")
     ]
     return pars, refs
@@ -79,6 +80,13 @@ def parse_par(content: bytes) -> dict[str, dict]:
             "macro_id": macro_id,
         }
     return sets
+
+
+def reference_names(content: bytes) -> list[tuple[str, str]]:
+    """(parameter name, origName) of every IIDM <reference> of a .par."""
+    root = ET.fromstring(content)
+    return [(r.get("name", ""), r.get("origName", "")) for r in root.iter(f"{{{_NS}}}reference")
+            if r.get("origData", "IIDM") == "IIDM" and r.get("name") and r.get("origName")]
 
 
 def macro_usage(content: bytes) -> dict[str, list[str]]:

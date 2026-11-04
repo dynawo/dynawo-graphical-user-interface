@@ -27,6 +27,9 @@ def isolated_user_config(tmp_path, monkeypatch):
     executable it names, for one)."""
     monkeypatch.setattr("backend.user_config._CONFIG_PATH", str(tmp_path / "user_config.json"))
     monkeypatch.delenv("DYNAWO_DEFAULT_EXE", raising=False)
+    # Saved rule sets and shared added models of the dynamic association.
+    monkeypatch.setattr("backend.association_rule_sets.RULE_SETS_DIR", str(tmp_path / "association_rules"))
+    monkeypatch.setattr("backend.association_custom.SHARED_PATH", str(tmp_path / "association_custom_models.json"))
 
 
 @pytest.fixture

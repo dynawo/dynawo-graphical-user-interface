@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Network and solver sets of jobs/network_and_solver.jobs; one solver value still to fill. -->
+<parametersSet xmlns="http://www.rte-france.com/dynawo">
+  <set id="Network">
+    <par type="DOUBLE" name="load_Tp" value="90"/>
+  </set>
+  <set id="IDA">
+    <par type="INT" name="order" value="2"/>
+    <par type="DOUBLE" name="absAccuracy" value=""/>
+  </set>
+</parametersSet>

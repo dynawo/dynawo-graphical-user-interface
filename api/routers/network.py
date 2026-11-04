@@ -18,7 +18,7 @@ from api.concurrency import pypowsybl_slot
 from api.dependencies import get_session
 from api.dyd_models import get_dyd_models
 from api.session_store import UserSession
-from backend.jobs_parser import find_final_state_iidm
+from backend.jobs_parser import find_final_state_iidm, job_relative
 from backend.network_diff import LEGEND as DIFF_LEGEND, DiffParams
 from backend.network_loader import (
     get_searchable_elements,
@@ -169,7 +169,7 @@ def _load_final_state_network(session: UserSession, run_id: int):
     run = next((r for r in session.sim_runs if r.run_id == run_id), None)
     if run is None:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
-    path = find_final_state_iidm(session.session_manager.working_dir, run.output_dir)
+    path = find_final_state_iidm(session.session_manager.working_dir, job_relative(run.jobs_file, run.output_dir))
     if path is None:
         raise HTTPException(
             status_code=404,

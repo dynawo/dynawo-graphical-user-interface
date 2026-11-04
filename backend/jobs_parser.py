@@ -115,6 +115,12 @@ def read_crv_input_file(jobs_path: str) -> str | None:
         return None
 
 
+def job_relative(jobs_file: str, ref: str) -> str:
+    """A path a jobs file gives (outputs directory, input file), relative to
+    the session root: Dynawo resolves it against the jobs file's folder."""
+    return os.path.normpath(os.path.join(os.path.dirname(jobs_file), ref))
+
+
 def find_final_state_iidm(working_dir: str, output_dir: str) -> str | None:
     """Return the absolute path to the final-state IIDM file, or None.
 
@@ -186,6 +192,17 @@ def read_network_iidm(jobs_path: str) -> str | None:
         return network.get("iidmFile") or None
     except Exception:
         return None
+
+
+def read_network_par(jobs_path: str) -> tuple[str | None, str | None]:
+    """Return (parFile, parId) of the <network> element, None for what is absent."""
+    try:
+        network = ET.parse(jobs_path).getroot().find(f".//{{{_NS}}}network")
+        if network is None:
+            return None, None
+        return network.get("parFile") or None, network.get("parId") or None
+    except Exception:
+        return None, None
 
 
 def write_network_iidm(jobs_path: str, iidm_filename: str) -> None:

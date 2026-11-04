@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<dyn:parametersSet xmlns:dyn="http://www.rte-france.com/dynawo">
+  <dyn:macroParameterSet id="M"><dyn:par type="DOUBLE" name="load_gamma" value="1"/></dyn:macroParameterSet>
+  <dyn:set id="Load">
+    <dyn:macroParSet id="M"/>
+    <dyn:par type="DOUBLE" name="load_alpha" value="2"/>
+    <dyn:reference type="DOUBLE" name="load_P0Pu" origData="IIDM" origName="p_pu"/>
+  </dyn:set>
+  <dyn:set id="Network"><dyn:par type="DOUBLE" name="load_Tp" value="90"/></dyn:set>
+  <dyn:set id="IDA"><dyn:par type="INT" name="order" value="2"/></dyn:set>
+</dyn:parametersSet>

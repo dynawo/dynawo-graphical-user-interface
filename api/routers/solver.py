@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 from api.dependencies import get_session
 from api.session_store import UserSession
-from backend.jobs_parser import read_solver_info
+from backend.jobs_parser import job_relative, read_solver_info
 from backend.models import ChangeLogEntry, ParameterChange
 from backend.par_parser import parse_par
 from backend.par_writer import write_par_values
@@ -24,19 +24,27 @@ from backend.par_writer import write_par_values
 router = APIRouter(tags=["solver"])
 
 
-def _get_solver_info(session: UserSession) -> dict:
-    jobs_files = [n for n, m in session.uploaded_files_info.items() if m.get("ftype") == "jobs"]
+def _jobs_files(session: UserSession) -> list[str]:
+    return [n for n, m in session.uploaded_files_info.items() if m.get("ftype") == "jobs"]
+
+
+def _get_solver_info(session: UserSession, jobs_file: str | None = None) -> dict:
+    """Solver of `jobs_file`, by default of the session's first jobs file."""
+    jobs_files = _jobs_files(session)
     if not jobs_files:
         raise HTTPException(status_code=404, detail="No .jobs file uploaded")
-    jobs_path = session.session_manager.get_path(jobs_files[0])
-    info = read_solver_info(jobs_path)
+    if jobs_file is not None and jobs_file not in jobs_files:
+        raise HTTPException(status_code=404, detail=f"{jobs_file} is not a .jobs file of the session")
+    jobs_file = jobs_file or jobs_files[0]
+    info = read_solver_info(session.session_manager.get_path(jobs_file))
     if info is None:
         raise HTTPException(status_code=404, detail="No <solver> element found in the jobs file")
     if not info.par_file:
         raise HTTPException(status_code=422, detail="Solver has no parFile attribute")
     if not info.par_id:
         raise HTTPException(status_code=422, detail="Solver has no parId attribute")
-    return {"lib": info.lib, "parFile": info.par_file, "parId": info.par_id}
+    return {"jobs_file": jobs_file, "lib": info.lib, "parFile": job_relative(jobs_file, info.par_file),
+            "parId": info.par_id}
 
 
 def _get_par_set(session: UserSession, par_file: str, par_id: str) -> dict:
@@ -50,11 +58,22 @@ def _get_par_set(session: UserSession, par_file: str, par_id: str) -> dict:
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
+@router.get("/jobs")
+def list_solver_jobs(session: UserSession = Depends(get_session)):
+    """The jobs files of the session whose solver has a parameter set."""
+    jobs = []
+    for name in _jobs_files(session):
+        info = read_solver_info(session.session_manager.get_path(name))
+        if info is not None and info.par_file and info.par_id:
+            jobs.append(name)
+    return jobs
+
+
 @router.get("/is-modified")
-def get_solver_is_modified(session: UserSession = Depends(get_session)):
+def get_solver_is_modified(jobs_file: str | None = None, session: UserSession = Depends(get_session)):
     """Return whether the solver par file differs from the original uploaded bytes."""
     try:
-        info = _get_solver_info(session)
+        info = _get_solver_info(session, jobs_file)
     except HTTPException:
         return {"modified": False}
     orig = session.session_manager.get_raw(info["parFile"])
@@ -68,13 +87,13 @@ def get_solver_is_modified(session: UserSession = Depends(get_session)):
 
 
 @router.get("/info")
-def get_solver_info(session: UserSession = Depends(get_session)):
-    return _get_solver_info(session)
+def get_solver_info(jobs_file: str | None = None, session: UserSession = Depends(get_session)):
+    return _get_solver_info(session, jobs_file)
 
 
 @router.get("/parameters")
-def get_solver_parameters(session: UserSession = Depends(get_session)):
-    info = _get_solver_info(session)
+def get_solver_parameters(jobs_file: str | None = None, session: UserSession = Depends(get_session)):
+    info = _get_solver_info(session, jobs_file)
     par_set = _get_par_set(session, info["parFile"], info["parId"])
     return {**info, "pars": par_set["pars"], "refs": par_set["refs"]}
 
@@ -84,8 +103,9 @@ class ApplySolverRequest(BaseModel):
 
 
 @router.put("/parameters")
-def apply_solver_parameters(req: ApplySolverRequest, session: UserSession = Depends(get_session)):
-    info = _get_solver_info(session)
+def apply_solver_parameters(req: ApplySolverRequest, jobs_file: str | None = None,
+                            session: UserSession = Depends(get_session)):
+    info = _get_solver_info(session, jobs_file)
     par_path = session.session_manager.get_path(info["parFile"])
     if not os.path.isfile(par_path):
         raise HTTPException(status_code=404, detail=f"Par file {info['parFile']} not found")
@@ -110,8 +130,8 @@ def apply_solver_parameters(req: ApplySolverRequest, session: UserSession = Depe
 
 
 @router.post("/restore")
-def restore_solver_par(session: UserSession = Depends(get_session)):
-    info = _get_solver_info(session)
+def restore_solver_par(jobs_file: str | None = None, session: UserSession = Depends(get_session)):
+    info = _get_solver_info(session, jobs_file)
     raw = session.session_manager.get_raw(info["parFile"])
     if raw is None:
         raise HTTPException(status_code=404, detail=f"No original bytes for {info['parFile']}")

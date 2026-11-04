@@ -10,11 +10,13 @@
 
 import { useEffect, useState } from 'react'
 import {
-  Alert, Button, Card, Checkbox, Collapse, Input, Select,
+  Alert, AutoComplete, Button, Card, Checkbox, Collapse, Input, Popover, Select,
   Space, Table, Tag, Tooltip, Typography,
 } from 'antd'
-import { RedoOutlined, RollbackOutlined, SaveOutlined } from '@ant-design/icons'
+import { LinkOutlined, RedoOutlined, RollbackOutlined, SaveOutlined } from '@ant-design/icons'
 import client from '../api/client'
+import { errorDetail } from '../api/errors'
+import { valuesEqual } from './parValues'
 
 const { Title, Text } = Typography
 
@@ -25,10 +27,12 @@ interface ModelEntry {
   lib: string
   parFile: string
   parId: string
+  /** A .dyd model, or the network set of a jobs file. */
+  kind: 'model' | 'network'
 }
 
 interface Par { name: string; type: string; value: string; shared: boolean }
-interface Ref { name: string; origData: string; origName: string; shared: boolean }
+interface Ref { name: string; type: string; origData: string; origName: string; shared: boolean }
 interface Change { name: string; old_value: string; new_value: string }
 interface LogEntry { timestamp: string; dyn_id: string; par_file: string; set_id: string; changes: Change[] }
 
@@ -38,16 +42,48 @@ interface ModelDetail extends ModelEntry {
   siblings: string[]
   macro_id: string | null
   macro_siblings: string[]
+  /** IIDM data suggested for a parameter: from the session's .par files, else Dynawo's naming. */
+  reference_suggestions: Record<string, string>
+  /** IIDM data names known from the session's .par files and Dynawo's naming. */
+  orig_names: string[]
 }
 
-function valuesEqual(fileVal: string, widgetVal: string, type: string): boolean {
-  try {
-    if (type === 'BOOL') return fileVal.trim().toLowerCase() === widgetVal.trim().toLowerCase()
-    if (type === 'INT') return parseInt(fileVal) === parseInt(widgetVal)
-    return parseFloat(fileVal) === parseFloat(widgetVal)
-  } catch {
-    return fileVal === widgetVal
-  }
+/** Popover giving a parameter by an IIDM reference instead of a value. */
+function ReferenceButton({ par, suggestion, origNames, onUse }: {
+  par: Par; suggestion?: string; origNames: string[]; onUse: (origName: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [origName, setOrigName] = useState(suggestion ?? '')
+  return (
+    <Popover
+      open={open}
+      onOpenChange={v => { setOpen(v); if (v) setOrigName(suggestion ?? '') }}
+      trigger="click"
+      title={<>Read <Text code>{par.name}</Text> from the network</>}
+      content={
+        <Space direction="vertical" style={{ width: 260 }}>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            IIDM data of the model's element (origName), read by Dynawo at initialisation.
+          </Text>
+          <AutoComplete
+            value={origName}
+            onChange={setOrigName}
+            options={origNames.filter(o => o.toLowerCase().includes(origName.toLowerCase())).map(o => ({ value: o }))}
+            placeholder="e.g. p_pu"
+            style={{ width: '100%' }}
+          />
+          <Button type="primary" size="small" disabled={!origName.trim()}
+                  onClick={() => { setOpen(false); onUse(origName.trim()) }}>
+            Use reference
+          </Button>
+        </Space>
+      }
+    >
+      <Tooltip title={suggestion ? `Read from the network (suggested: ${suggestion})` : 'Read from the network'}>
+        <Button size="small" type="text" icon={<LinkOutlined />} />
+      </Tooltip>
+    </Popover>
+  )
 }
 
 export default function EditParameters() {
@@ -81,12 +117,13 @@ export default function EditParameters() {
     setModifiedParFiles(res.data)
   }
 
-  const fetchDetail = async (modelId: string) => {
+  // `keep`: values typed but not applied yet, kept for the parameters still there.
+  const fetchDetail = async (modelId: string, keep: Record<string, string> = {}) => {
     try {
       const res = await client.get<ModelDetail>(`/parameters/model/${encodeURIComponent(modelId)}`)
       setDetail(res.data)
       const initial: Record<string, string> = {}
-      for (const p of res.data.pars) initial[p.name] = p.value
+      for (const p of res.data.pars) initial[p.name] = keep[p.name] ?? p.value
       setFormVals(initial)
     } catch (err: any) {
       setDetail(null)
@@ -120,6 +157,33 @@ export default function EditParameters() {
       setSaving(false)
     }
   }
+
+  const handleReferences = async (toReference: Record<string, string>, toValue: string[] = []) => {
+    if (!selectedModelId || !detail) return
+    setError(null)
+    setSuccess(null)
+    // Unsaved values of the other parameters are kept.
+    const pending = Object.fromEntries(detail.pars
+      .filter(p => !(p.name in toReference) && !valuesEqual(p.value, formVals[p.name] ?? p.value, p.type))
+      .map(p => [p.name, formVals[p.name]]))
+    try {
+      await client.put(`/parameters/model/${encodeURIComponent(selectedModelId)}/references`,
+                       { to_reference: toReference, to_value: toValue })
+      await fetchDetail(selectedModelId, pending)
+      await fetchModified()
+      const n = Object.keys(toReference).length
+      setSuccess(n ? `${n} parameter(s) now read from the network.` : `${toValue.length} reference(s) turned into value(s) to fill.`)
+    } catch (err) {
+      setError(errorDetail(err, 'Could not change the references'))
+    }
+  }
+
+  // Parameters without value that a suggested reference could give.
+  const suggested = detail
+    ? Object.fromEntries(detail.pars
+        .filter(p => !p.shared && !p.value && detail.kind === 'model' && detail.reference_suggestions[p.name])
+        .map(p => [p.name, detail.reference_suggestions[p.name]]))
+    : {}
 
   const handleRestore = async (parFile: string) => {
     await client.post(`/parameters/restore/${encodeURIComponent(parFile)}`)
@@ -289,6 +353,19 @@ export default function EditParameters() {
                 </Text>
               )}
 
+              {Object.keys(suggested).length > 0 && (
+                <Alert
+                  type="info" showIcon style={{ marginBottom: 12 }}
+                  description={<>
+                    {Object.keys(suggested).length} parameter(s) without value could be read from the network:{' '}
+                    {Object.entries(suggested).map(([n, o]) => `${n} ← ${o}`).join(', ')}.
+                  </>}
+                  action={<Button size="small" icon={<LinkOutlined />} onClick={() => handleReferences(suggested)}>
+                    Use these references
+                  </Button>}
+                />
+              )}
+
               {detail.pars.length > 0 && (
                 <Table
                   size="small"
@@ -335,11 +412,24 @@ export default function EditParameters() {
                         return (
                           <Input
                             value={val}
+                            placeholder={par.value ? undefined : 'to fill'}
+                            status={!val ? 'warning' : undefined}
                             style={{ width: '100%', borderColor: dirty ? '#faad14' : undefined }}
                             onChange={e => setFormVals(prev => ({ ...prev, [par.name]: e.target.value }))}
                           />
                         )
                       },
+                    },
+                    {
+                      key: 'reference', width: 48,
+                      render: (_: unknown, par: Par) => par.shared || detail.kind !== 'model' ? null : (
+                        <ReferenceButton
+                          par={par}
+                          suggestion={detail.reference_suggestions[par.name]}
+                          origNames={detail.orig_names}
+                          onUse={origName => handleReferences({ [par.name]: origName })}
+                        />
+                      ),
                     },
                   ]}
                 />
@@ -347,7 +437,7 @@ export default function EditParameters() {
 
               {detail.refs.length > 0 && (
                 <>
-                  <Title level={5} style={{ marginTop: 16 }}>IIDM references (read-only)</Title>
+                  <Title level={5} style={{ marginTop: 16 }}>IIDM references</Title>
                   <Table
                     size="small"
                     pagination={false}
@@ -356,6 +446,14 @@ export default function EditParameters() {
                     columns={[
                       { title: 'Name', dataIndex: 'name', render: (n: string) => <Text code>{n}</Text> },
                       { title: 'Source', key: 'src', render: (_: unknown, r: Ref) => <Text type="secondary">← {r.origName} ({r.origData})</Text> },
+                      {
+                        key: 'value', width: 140,
+                        render: (_: unknown, r: Ref) => r.shared ? <Tag color="orange">shared</Tag> : (
+                          <Button size="small" type="link" onClick={() => handleReferences({}, [r.name])}>
+                            Give a value instead
+                          </Button>
+                        ),
+                      },
                     ]}
                   />
                 </>

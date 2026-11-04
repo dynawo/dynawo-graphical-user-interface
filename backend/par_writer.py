@@ -15,6 +15,37 @@ import xml.etree.ElementTree as ET
 _NS = "http://www.rte-france.com/dynawo"
 
 
+def set_references(
+    par_path: str, set_id: str, to_reference: dict[str, tuple[str, str]], to_value: dict[str, str],
+) -> None:
+    """Turn direct entries of set_id into IIDM references, or back.
+
+    `to_reference` ({name: (origName, type)}) replaces each <par> with a
+    <reference origData="IIDM">; `to_value` ({name: type}) replaces each
+    <reference> with a <par> without value, to fill. Parameters of a macro
+    are not handled: the caller refuses them.
+    """
+    ET.register_namespace("", _NS)
+    tree = ET.parse(par_path)
+    target_set = next(
+        (s for s in tree.getroot().findall(f"{{{_NS}}}set") if s.get("id") == set_id), None,
+    )
+    if target_set is None:
+        return
+    for child in list(target_set):
+        name = child.get("name", "")
+        if (child.tag == f"{{{_NS}}}par" and name in to_reference) or \
+                (child.tag == f"{{{_NS}}}reference" and name in to_value):
+            target_set.remove(child)
+    for name, (orig_name, ptype) in to_reference.items():
+        ET.SubElement(target_set, f"{{{_NS}}}reference",
+                      {"type": ptype, "name": name, "origData": "IIDM", "origName": orig_name})
+    for name, ptype in to_value.items():
+        ET.SubElement(target_set, f"{{{_NS}}}par", {"type": ptype, "name": name, "value": ""})
+    ET.indent(tree, space="  ")
+    tree.write(par_path, xml_declaration=True, encoding="UTF-8")
+
+
 def write_par_values(
     par_path: str, set_id: str, updates: dict[str, str], types: dict[str, str] | None = None,
 ) -> None:
