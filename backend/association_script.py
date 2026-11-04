@@ -455,6 +455,7 @@ def _constants(generation: dict, iidm: str, par_files: list[str], network: tuple
         f"_VOLTAGE_LEVEL_ATTRIBUTES = {association_rules._VOLTAGE_LEVEL_ATTRIBUTES!r}",
         f"_FILE_ATTRIBUTES = {compatibility._FILE_ATTRIBUTES!r}",
         f"FULL_UPGRADE_ORIGIN = {compatibility.FULL_UPGRADE_ORIGIN!r}",
+        f"_IMP_SHIM = {compatibility._IMP_SHIM!r}",
         "",
     ])
 
@@ -464,7 +465,8 @@ def _functions() -> str:
     functions = [element_table, association_par.for_powsybl, association_par.set_ids, association_par._unique,
                  _Assembler, association_par.assemble_par, numeric_version,
                  compatibility.update_tool_place, compatibility.find_update_tool,
-                 compatibility.update_python, compatibility.run_update, compatibility.relink]
+                 compatibility.update_python, compatibility.imp_shim, compatibility.run_update,
+                 compatibility.relink]
     return "".join("\n\n" + inspect.getsource(f) for f in functions)
 
 
