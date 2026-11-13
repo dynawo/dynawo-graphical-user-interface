@@ -28,6 +28,11 @@ services:
         http_proxy: ${HTTP_PROXY:-}
         https_proxy: ${HTTPS_PROXY:-}
         no_proxy: ${NO_PROXY:-}
+        # How many Dynawo and DynaFlow Launcher releases to bake into the
+        # image, most recent first (~0.5 GB each); the others can still be
+        # downloaded from the app. 0 bakes every listed release. See the
+        # releases stage of docker/Dockerfile.backend.
+        PREFETCH_RELEASES: ${PREFETCH_RELEASES:-2}
     environment:
       # See README "Environment variables" for the full list. Override any of
       # these without editing this file by putting them in a .env file next to

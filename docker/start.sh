@@ -27,6 +27,7 @@
 #   GUI_PORT             host port to serve on            (default 8080)
 #   SESSION_TTL          backend session lifetime         (default 3600)
 #   MAX_CONCURRENT_SIMS  parallel simulation limit        (default 4)
+#   PREFETCH_RELEASES    Dynawo/DynaFlow releases baked in (default 2, 0 = all)
 #   HTTP_PROXY/HTTPS_PROXY/NO_PROXY   inherited for builds and for the app
 #
 # Stop it again with ./docker/stop.sh

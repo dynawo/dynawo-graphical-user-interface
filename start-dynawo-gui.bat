@@ -14,6 +14,13 @@ rem Double-click this file, or run it from PowerShell. Everything the
 rem application needs - Python, Node, Dynawo, DynaFlow Launcher - is inside the
 rem container image, so nothing has to be installed on Windows except Docker.
 rem
+rem Settings come from the environment or a .env file next to this script:
+rem   GUI_PORT             host port to serve on            (default 8080)
+rem   SESSION_TTL          backend session lifetime         (default 3600)
+rem   MAX_CONCURRENT_SIMS  parallel simulation limit        (default 4)
+rem   PREFETCH_RELEASES    Dynawo/DynaFlow releases baked in (default 2, 0 = all)
+rem   HTTP_PROXY/HTTPS_PROXY/NO_PROXY   inherited for builds and for the app
+rem
 rem Stop it again with stop-dynawo-gui.bat
 rem
 rem This is the Windows counterpart of docker/start.sh.

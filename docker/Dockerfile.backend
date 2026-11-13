@@ -64,20 +64,27 @@ RUN rm -rf /opt/venv/lib/python3.10/site-packages/pandas/tests \
 
 
 # ─── releases stage ───────────────────────────────────────────────────────────
-# Pre-fetches every Linux release listed in resources/dynawo_versions.json and
-# resources/dynaflow_versions.json, so the shipped image needs no download on
-# first run: no wait for the user, no dependency on GitHub being reachable, and
-# one less proxy layer to configure.
+# Pre-fetches the most recent Linux releases listed in
+# resources/dynawo_versions.json and resources/dynaflow_versions.json, so the
+# shipped image needs no download on first run: no wait for the user, no
+# dependency on GitHub being reachable, and one less proxy layer to configure.
+#
+# PREFETCH_RELEASES is how many of each to bake, most recent first (the nightly
+# "master", then the numbered releases). Each Dynawo release adds ~0.5 GB to
+# the image, so the default stops at two; the others stay listed in the app and
+# can be downloaded from it. 0 bakes every listed release. Set it with
+# PREFETCH_RELEASES=... docker compose build (docker-compose.yml passes it on).
 #
 # curl, unzip and the archives themselves stay in this throwaway stage — only
 # the extracted trees are copied into the runtime image.
 #
-# These layers are keyed on the two JSON files, so they re-download only when
-# the version lists actually change.
+# These layers are keyed on the two JSON files and on PREFETCH_RELEASES, so
+# they re-download only when the version lists or the count actually change.
 
 FROM ubuntu:22.04 AS releases
 
 ENV DEBIAN_FRONTEND=noninteractive
+ARG PREFETCH_RELEASES=2
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
@@ -92,10 +99,10 @@ RUN chmod +x /usr/local/bin/docker-prefetch-releases.sh
 # Separate COPY/RUN pairs so adding a Dynawo version does not invalidate the
 # DynaFlow download, and vice versa.
 COPY resources/dynawo_versions.json /tmp/dynawo_versions.json
-RUN docker-prefetch-releases.sh /tmp/dynawo_versions.json /opt/dynawo-preinstalled
+RUN docker-prefetch-releases.sh /tmp/dynawo_versions.json /opt/dynawo-preinstalled "$PREFETCH_RELEASES"
 
 COPY resources/dynaflow_versions.json /tmp/dynaflow_versions.json
-RUN docker-prefetch-releases.sh /tmp/dynaflow_versions.json /opt/dynaflow-preinstalled
+RUN docker-prefetch-releases.sh /tmp/dynaflow_versions.json /opt/dynaflow-preinstalled "$PREFETCH_RELEASES"
 
 
 # ─── runtime stage ────────────────────────────────────────────────────────────
