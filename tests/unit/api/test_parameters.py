@@ -59,7 +59,7 @@ def test_unknown_model_is_404(case, client):
 def test_edit_is_written_and_logged(case, client):
     response = client.put("/api/parameters/model/GEN1", json={"values": {"generator_SNom": "2500"}})
 
-    assert response.json() == {"changed": 1}
+    assert response.json() == {"changed": 1, "propagated": [], "skipped": []}
     assert _value(client, "GEN1", "generator_SNom") == "2500"
     assert _value(client, "GEN1_BIS", "generator_SNom") == "2500"  # same <set>
     log = client.get("/api/parameters/changelog").json()
@@ -72,8 +72,56 @@ def test_edit_is_written_and_logged(case, client):
 def test_edit_to_the_same_value_is_not_logged(case, client):
     response = client.put("/api/parameters/model/GEN1", json={"values": {"generator_SNom": "2000"}})
 
-    assert response.json() == {"changed": 0}
+    assert response.json() == {"changed": 0, "propagated": [], "skipped": []}
     assert client.get("/api/parameters/changelog").json() == []
+
+
+def test_models_of_the_same_lib_are_listed(case, client):
+    assert client.get("/api/parameters/model/GEN1").json()["same_lib"] == ["GEN1_BIS", "GEN2"]
+    assert client.get("/api/parameters/model/LOAD1").json()["same_lib"] == []
+
+
+def test_edit_is_not_propagated_unless_asked(case, client):
+    client.put("/api/parameters/model/GEN1", json={"values": {"generator_SNom": "2500"}})
+
+    assert _value(client, "GEN2", "generator_SNom") == "1150"
+
+
+def test_propagated_edit_reaches_every_model_of_the_lib(case, client):
+    response = client.put("/api/parameters/model/GEN1",
+                          json={"values": {"generator_SNom": "2500", "generator_ExcitationPu": "1"},
+                                "propagate": True})
+
+    assert response.json() == {"changed": 1, "propagated": ["GEN2"], "skipped": []}
+    assert _value(client, "GEN2", "generator_SNom") == "2500"
+    # Only the changed parameter travels: GEN2 does not get the untouched one.
+    assert "generator_ExcitationPu" not in {
+        p["name"] for p in client.get("/api/parameters/model/GEN2").json()["pars"]}
+    log = client.get("/api/parameters/changelog").json()
+    assert [(e["dyn_id"], e["set_id"]) for e in log] == [("GEN1", "GEN1"), ("GEN2", "GEN2")]
+
+
+def test_propagation_through_a_shared_macro_is_not_logged_twice(case, client):
+    response = client.put("/api/parameters/model/GEN2",
+                          json={"values": {"generator_H": "6"}, "propagate": True})
+
+    # GEN1 gets it from the same macro, already written for GEN2.
+    assert response.json() == {"changed": 1, "propagated": [], "skipped": []}
+    assert _value(client, "GEN1", "generator_H") == "6"
+    assert len(client.get("/api/parameters/changelog").json()) == 1
+
+
+def test_propagation_leaves_a_parameter_read_from_the_network(case, upload, client):
+    upload("dyd/two_loads.dyd", "par/two_loads.par")
+
+    response = client.put("/api/parameters/model/LOAD_A",
+                          json={"values": {"load_P0Pu": "0.5", "load_alpha": "1.5"}, "propagate": True})
+
+    assert response.json() == {"changed": 2, "propagated": ["LOAD_B"],
+                               "skipped": [{"dyn_id": "LOAD_B", "reason": "load_P0Pu is read from the network"}]}
+    load_b = client.get("/api/parameters/model/LOAD_B").json()
+    assert [r["name"] for r in load_b["refs"]] == ["load_P0Pu"]
+    assert {p["name"]: p["value"] for p in load_b["pars"]}["load_alpha"] == "1.5"
 
 
 def test_revert_puts_the_old_value_back(case, client):
@@ -133,5 +181,5 @@ def test_network_set_of_a_job_is_editable(case, upload, client):
     assert not any(m["dyn_id"].startswith("SOLVER") for m in models.values())   # Edit Solver Params
 
     url = "/api/parameters/model/NETWORK [network_and_solver.jobs]"
-    assert client.put(url, json={"values": {"load_Tp": "60"}}).json() == {"changed": 1}
+    assert client.put(url, json={"values": {"load_Tp": "60"}}).json()["changed"] == 1
     assert _value(client, "NETWORK [network_and_solver.jobs]", "load_Tp") == "60"

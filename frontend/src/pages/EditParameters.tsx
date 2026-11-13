@@ -35,6 +35,7 @@ interface Par { name: string; type: string; value: string; shared: boolean }
 interface Ref { name: string; type: string; origData: string; origName: string; shared: boolean }
 interface Change { name: string; old_value: string; new_value: string }
 interface LogEntry { timestamp: string; dyn_id: string; par_file: string; set_id: string; changes: Change[] }
+interface ApplyResult { changed: number; propagated: string[]; skipped: { dyn_id: string; reason: string }[] }
 
 interface ModelDetail extends ModelEntry {
   pars: Par[]
@@ -42,6 +43,8 @@ interface ModelDetail extends ModelEntry {
   siblings: string[]
   macro_id: string | null
   macro_siblings: string[]
+  /** Other models of the same lib, which "Apply to all" also updates. */
+  same_lib: string[]
   /** IIDM data suggested for a parameter: from the session's .par files, else Dynawo's naming. */
   reference_suggestions: Record<string, string>
   /** IIDM data names known from the session's .par files and Dynawo's naming. */
@@ -94,6 +97,7 @@ export default function EditParameters() {
   const [changelog, setChangelog] = useState<LogEntry[]>([])
   const [modifiedParFiles, setModifiedParFiles] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
+  const [propagate, setPropagate] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
 
@@ -145,12 +149,20 @@ export default function EditParameters() {
     setError(null)
     setSuccess(null)
     try {
-      const res = await client.put<{ changed: number }>(
-        `/parameters/model/${encodeURIComponent(selectedModelId)}`, { values: formVals })
+      const res = await client.put<ApplyResult>(
+        `/parameters/model/${encodeURIComponent(selectedModelId)}`,
+        { values: formVals, propagate: propagate && (detail?.same_lib.length ?? 0) > 0 })
       await fetchDetail(selectedModelId)
       await fetchChangelog()
       await fetchModified()
-      setSuccess(`${res.data.changed} parameter(s) updated.`)
+      const { changed: n, propagated, skipped } = res.data
+      let msg = `${n} parameter(s) updated.`
+      // A lib can have hundreds of models: name a few, count the rest.
+      const few = (items: string[]) =>
+        items.slice(0, 5).join(', ') + (items.length > 5 ? ` and ${items.length - 5} more` : '')
+      if (propagated.length) msg += ` Also applied to ${propagated.length} model(s): ${few(propagated)}.`
+      if (skipped.length) msg += ` Left out: ${few(skipped.map(s => `${s.dyn_id} (${s.reason})`))}.`
+      setSuccess(msg)
     } catch (err: any) {
       setError(err.response?.data?.detail ?? 'Save failed')
     } finally {
@@ -295,7 +307,8 @@ export default function EditParameters() {
               <Select
                 options={modelOptions}
                 value={selectedModelId}
-                onChange={setSelectedModelId}
+                // Opt-in per model: switching model never carries "Apply to all" over.
+                onChange={id => { setSelectedModelId(id); setPropagate(false) }}
                 style={{ width: '100%' }}
                 showSearch
                 optionFilterProp="label"
@@ -335,6 +348,14 @@ export default function EditParameters() {
                 <Space>
                   {success && <Text type="success">{success}</Text>}
                   {error && <Text type="danger">{error}</Text>}
+                  {detail.same_lib.length > 0 && (
+                    <Tooltip title={<>Only the parameters you changed are copied, to: {detail.same_lib.join(', ')}.
+                      Where a model reads one from the network, it is left as is.</>}>
+                      <Checkbox checked={propagate} onChange={e => setPropagate(e.target.checked)}>
+                        Apply to all {detail.lib} ({detail.same_lib.length + 1})
+                      </Checkbox>
+                    </Tooltip>
+                  )}
                   <Button
                     type="primary"
                     icon={<SaveOutlined />}

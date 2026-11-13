@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Sets of dyd/two_loads.dyd. -->
+<parametersSet xmlns="http://www.rte-france.com/dynawo">
+  <set id="LOAD_A">
+    <par type="DOUBLE" name="load_alpha" value="2"/>
+    <par type="DOUBLE" name="load_P0Pu" value="0.3"/>
+  </set>
+  <set id="LOAD_B">
+    <par type="DOUBLE" name="load_alpha" value="2"/>
+    <reference type="DOUBLE" name="load_P0Pu" origData="IIDM" origName="p_pu"/>
+  </set>
+</parametersSet>

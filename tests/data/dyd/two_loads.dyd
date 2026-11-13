@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Models of par/two_loads.par: two loads of one lib; LOAD_B reads
+     load_P0Pu from the network where LOAD_A gives it a value. -->
+<dyn:dynamicModelsArchitecture xmlns:dyn="http://www.rte-france.com/dynawo">
+  <dyn:blackBoxModel id="LOAD_A" lib="LoadAlphaBetaRestorative" parFile="two_loads.par" parId="LOAD_A" staticId="LOAD_A"/>
+  <dyn:blackBoxModel id="LOAD_B" lib="LoadAlphaBetaRestorative" parFile="two_loads.par" parId="LOAD_B" staticId="LOAD_B"/>
+</dyn:dynamicModelsArchitecture>
