@@ -936,6 +936,28 @@ highlighted in amber until the operation is confirmed. Parameters still without
 value, as in the sets created by the Dynamic Association page
 (Section~\ref{sec:dynassoc}), show \emph{to fill}.
 
+\subsection{Applying a change to all models of the same type}
+
+When other models use the same library (\code{lib} in the \ftype{dyd}) as the
+selected one, an \textbf{Apply to all \textit{lib} (\textit{n})} checkbox appears
+next to \textbf{Apply changes}; its tooltip lists those models. Tick it to give
+the parameters you changed to every one of them as well:
+
+\begin{itemize}
+  \item Only the parameters changed on the selected model are copied; the other
+    values of each model are kept.
+  \item A model whose set reads the parameter from the network (IIDM reference)
+    keeps the reference.
+  \item A model whose set lacks the parameter gets it added.
+  \item Models with no parameter set, or whose set or PAR file cannot be found,
+    are left out.
+\end{itemize}
+
+The message after \textbf{Apply} names the models updated and those left out,
+with the reason. Each updated model gets its own change-log entry, so it can be
+reverted on its own. The checkbox is unticked whenever another model is
+selected. The network sets of the jobs files form one type of their own.
+
 \subsection{IIDM references}
 
 A parameter can be read from the network instead of given a value: Dynawo then
@@ -955,7 +977,8 @@ into references.
 \subsection{Change log}
 
 Every \textbf{Apply} operation appends an entry to the change log, grouped by
-dynamic model ID. Each entry lists the timestamp, PAR file, parameter set, and
+dynamic model ID --- one entry per model when the change was applied to all
+models of the same type. Each entry lists the timestamp, PAR file, parameter set, and
 the old/new value for every modified parameter. Two actions are available per
 entry:
 

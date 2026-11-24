@@ -57,8 +57,8 @@ const STEPS = [
   {
     title: 'Edit Parameters',
     icon: <EditOutlined />,
-    description: 'Edit the parameters of the dynamic models and of the network, fill new sets, read values '
-      + 'from the network (IIDM references).',
+    description: 'Edit the parameters of the dynamic models and of the network, apply a change to all models '
+      + 'of the same type, fill new sets, read values from the network (IIDM references).',
   },
   {
     title: 'Edit Solver Parameters',
