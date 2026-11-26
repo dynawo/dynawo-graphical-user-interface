@@ -17,6 +17,7 @@ Document: {"nsmap", "prolog", "root", "epilog"}. Node: an element
 
 import hashlib
 import os
+import re
 import threading
 from dataclasses import dataclass, field
 
@@ -43,6 +44,9 @@ FILE_REFS: dict[tuple[str, str], str | None] = {
 
 # Elements whose parId must be a set of their parFile.
 PAR_SET_REFS = {"solver", "network", "localInit"}
+
+# Attribute an lxml validation message is about.
+_ATTRIBUTE_IN_MESSAGE = re.compile(r"[Aa]ttribute '([^']+)'")
 
 # Schemas are shared between sessions: one validation at a time.
 _validation_lock = threading.Lock()
@@ -249,11 +253,14 @@ def _schema_errors(doc: dict, schema: JobsSchema) -> list[dict]:
         schema.validator.validate(tree)
         errors = list(schema.validator.error_log)
     lines = _paths_by_line(tree.getroot(), doc["root"], [])
-    return [{
-        "level": "error",
-        "path": lines.get(e.line, []),
-        "message": e.message.replace(f"{{{DYN_NS}}}", ""),
-    } for e in errors]
+    issues = []
+    for e in errors:
+        issue = {"level": "error", "path": lines.get(e.line, []), "message": e.message.replace(f"{{{DYN_NS}}}", "")}
+        attribute = _ATTRIBUTE_IN_MESSAGE.search(e.message)
+        if attribute:
+            issue["attribute"] = attribute.group(1)
+        issues.append(issue)
+    return issues
 
 
 def _paths_by_line(el: etree._Element, node: dict, path: list[int]) -> dict[int, list[int]]:

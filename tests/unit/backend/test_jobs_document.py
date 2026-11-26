@@ -154,7 +154,7 @@ def test_a_wrong_value_is_reported_on_its_element(valid, schema):
     outputs = _child(_job(valid), "outputs")
     _child(outputs, "timeline")["attrs"]["exportMode"] = "PDF"
     normalised, issues = check(valid, schema)
-    assert [i["path"] for i in issues] == [[0, 3, 0]]
+    assert [(i["path"], i["attribute"]) for i in issues] == [([0, 3, 0], "exportMode")]
     assert _child(_job(normalised), "outputs") is normalised["root"]["children"][0]["children"][3]
 
 
