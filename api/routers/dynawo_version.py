@@ -59,6 +59,11 @@ def _find_dynawo_exe(extract_dir: str) -> str | None:
     return None
 
 
+def _executable_status(session: UserSession) -> dict:
+    """Selected executable, and why its jobs.xsd could not be loaded (None if it was)."""
+    return {"exe": session.dynawo_executable or "", "jobs_xsd_error": session.jobs_schema_error}
+
+
 def _load_versions() -> dict:
     try:
         with open(_VERSIONS_PATH) as fh:
@@ -138,7 +143,7 @@ def use_version(os_key: str, version: str, session: UserSession = Depends(get_se
         raise HTTPException(status_code=404, detail="dynawo.sh not found in extracted folder")
     session.dynawo_executable = exe
     update_user_config(lambda cfg: cfg.__setitem__("dynawo_executable", exe))
-    return {"exe": exe}
+    return _executable_status(session)
 
 
 @router.delete("/remove/{os_key}/{version}")
@@ -165,7 +170,7 @@ def get_executable(session: UserSession = Depends(get_session)):
     exe = session.dynawo_executable or load_user_config().get("dynawo_executable", "")
     if exe and not session.dynawo_executable:
         session.dynawo_executable = exe
-    return {"exe": exe}
+    return _executable_status(session)
 
 
 class ExeRequest(BaseModel):
@@ -182,7 +187,7 @@ def set_executable(req: ExeRequest, session: UserSession = Depends(get_session))
         add_local_executable(exe)
     else:
         clear_default_executable()
-    return {"exe": exe}
+    return _executable_status(session)
 
 
 @router.get("/local")

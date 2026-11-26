@@ -32,6 +32,11 @@ interface LocalExecutable {
   exe: string
 }
 
+interface ExecutableStatus {
+  exe: string
+  jobs_xsd_error: string | null
+}
+
 interface ProgressEvent {
   fraction: number
   text: string
@@ -46,6 +51,7 @@ export default function DynawoVersion() {
   const [exe, setExe] = useState('')
   const [exeInput, setExeInput] = useState('')
   const [exeError, setExeError] = useState<string | null>(null)
+  const [jobsXsdError, setJobsXsdError] = useState<string | null>(null)
   const [showExePicker, setShowExePicker] = useState(false)
 
   const [selectedOs, setSelectedOs] = useState('')
@@ -62,13 +68,14 @@ export default function DynawoVersion() {
       client.get('/dynawo/versions'),
       client.get<DownloadedVersion[]>('/dynawo/downloaded'),
       client.get<LocalExecutable[]>('/dynawo/local'),
-      client.get<{ exe: string }>('/dynawo/executable'),
+      client.get<ExecutableStatus>('/dynawo/executable'),
     ])
     setVersions(vRes.data)
     setDownloaded(dRes.data)
     setLocalExes(lRes.data)
     setExe(eRes.data.exe)
     setExeInput(eRes.data.exe)
+    setJobsXsdError(eRes.data.jobs_xsd_error)
     if (!selectedOs && Object.keys(vRes.data).length) {
       const firstOs = Object.keys(vRes.data)[0]
       setSelectedOs(firstOs)
@@ -90,9 +97,10 @@ export default function DynawoVersion() {
   }
 
   const handleUse = async (os_key: string, version: string) => {
-    const res = await client.post<{ exe: string }>(`/dynawo/use/${os_key}/${version}`)
+    const res = await client.post<ExecutableStatus>(`/dynawo/use/${os_key}/${version}`)
     setExe(res.data.exe)
     setExeInput(res.data.exe)
+    setJobsXsdError(res.data.jobs_xsd_error)
   }
 
   const handleRemove = async (os_key: string, version: string) => {
@@ -103,9 +111,10 @@ export default function DynawoVersion() {
   const handleUseLocal = async (exe: string) => {
     setExeError(null)
     try {
-      const res = await client.post<{ exe: string }>('/dynawo/executable', { exe })
+      const res = await client.post<ExecutableStatus>('/dynawo/executable', { exe })
       setExe(res.data.exe)
       setExeInput(res.data.exe)
+      setJobsXsdError(res.data.jobs_xsd_error)
     } catch (err: any) {
       setExeError(err.response?.data?.detail ?? 'Error setting executable')
     }
@@ -270,6 +279,14 @@ export default function DynawoVersion() {
           <Alert
             type="success"
             description={<Text code>{exe}</Text>}
+            style={{ marginBottom: 12 }}
+          />
+        )}
+        {exe && jobsXsdError && (
+          <Alert
+            type="warning"
+            title="jobs.xsd not loaded: jobs files cannot be edited with this Dynawo"
+            description={jobsXsdError}
             style={{ marginBottom: 12 }}
           />
         )}
