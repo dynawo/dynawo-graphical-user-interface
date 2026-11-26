@@ -319,7 +319,7 @@ function CurvesBuilder({ runs }: CurvesProps) {
           if (e.response?.status !== 404) {
             setCurvesError(e.response?.data?.detail ?? 'Failed to load curves data.')
           }
-          // 404 = no curves CSV for this run (expected for runs before a CRV file was created)
+          // 404 = no curves file for this run (expected for runs before a CRV file was created)
         })
     )
 
@@ -357,7 +357,7 @@ function CurvesBuilder({ runs }: CurvesProps) {
   if (fetchingCurves) return <Spin description="Loading curves…" style={{ display: 'block', marginTop: 20 }} />
   if (curvesError) return <Alert type="warning" description={curvesError} style={{ marginTop: 12 }} />
 
-  if (Object.keys(runData).length === 0) return <Alert type="info" description="No curve data available. The simulation may not have produced a curves CSV file." style={{ marginTop: 12 }} />
+  if (Object.keys(runData).length === 0) return <Alert type="info" description="No curve data available. The simulation may not have produced a curves file." style={{ marginTop: 12 }} />
 
   // Union of columns across all runs so signals added in later runs are visible
   const allCols = [...new Set(Object.values(runData).flatMap(d => Object.keys(d.signals)))]

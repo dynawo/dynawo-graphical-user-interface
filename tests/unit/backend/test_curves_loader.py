@@ -8,7 +8,13 @@
 # SPDX-License-Identifier: MPL-2.0
 #
 
-from backend.curves_loader import curves_time_and_signals, load_curves_csv, read_crv_info
+from backend.curves_loader import (
+    curves_time_and_signals,
+    load_curves,
+    load_curves_csv,
+    load_curves_hdf5,
+    read_crv_info,
+)
 
 
 def test_crv_info_names_each_column_after_model_and_variable(data_dir):
@@ -69,3 +75,41 @@ def test_empty_csv_is_none(tmp_path):
     (tmp_path / "curves" / "curves.csv").write_text("")
 
     assert load_curves_csv(str(tmp_path)) is None
+
+
+def _write_h5(output_dir, time, names, data):
+    """A curves.h5 laid out as Dynawo writes it: time, curve_names, data (time x curves)."""
+    import h5py
+
+    (output_dir / "curves").mkdir(parents=True, exist_ok=True)
+    with h5py.File(output_dir / "curves" / "curves.h5", "w") as fh:
+        fh["time"] = time
+        fh.create_dataset("curve_names", data=names, dtype=h5py.string_dtype("ascii"))
+        fh["data"] = data
+
+
+def test_curves_hdf5_gives_the_same_table_as_the_csv(tmp_path):
+    _write_h5(tmp_path, [0.0, 1.0, 2.0], ["NETWORK_BUS1_Upu_value", "GEN1_generator_omegaPu"],
+              [[1.02, 1.0], [0.98, 0.999], [1.01, 1.001]])
+    df = load_curves_hdf5(str(tmp_path))
+    time, signals = curves_time_and_signals(df)
+    assert list(time) == [0.0, 1.0, 2.0]
+    assert signals == ["NETWORK_BUS1_Upu_value", "GEN1_generator_omegaPu"]
+    assert list(df["GEN1_generator_omegaPu"]) == [1.0, 0.999, 1.001]
+
+
+def test_curves_hdf5_stored_curve_by_curve_is_read_too(tmp_path):
+    _write_h5(tmp_path, [0.0, 1.0, 2.0], ["A_x", "B_y"], [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    assert list(load_curves_hdf5(str(tmp_path))["B_y"]) == [4.0, 5.0, 6.0]
+
+
+def test_curves_hdf5_with_inconsistent_sizes_is_not_read(tmp_path):
+    _write_h5(tmp_path, [0.0, 1.0], ["A_x", "B_y"], [[1.0, 2.0, 3.0]])
+    assert load_curves_hdf5(str(tmp_path)) is None
+
+
+def test_load_curves_reads_csv_or_hdf5(tmp_path, data_dir):
+    assert load_curves(str(tmp_path)) is None
+    _write_h5(tmp_path, [0.0], ["A_x"], [[1.0]])
+    assert list(load_curves(str(tmp_path)).columns) == ["time", "A_x"]
+    assert list(load_curves(str(data_dir / "outputs")).columns)[0] == "time"

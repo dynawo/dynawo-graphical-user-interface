@@ -68,7 +68,7 @@ const STEPS = [
   {
     title: 'Edit Curves',
     icon: <LineChartOutlined />,
-    description: 'Choose the model variables Dynawo exports to curves.csv.',
+    description: 'Choose the model variables Dynawo exports to the curves file (CSV or HDF5).',
   },
   {
     title: 'Events',

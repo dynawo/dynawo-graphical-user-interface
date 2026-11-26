@@ -54,3 +54,22 @@ def test_deleting_the_run_removes_its_outputs_next_to_the_job(run_in_folder, cli
     assert client.delete("/api/simulation/1").json() == {"ok": True}
 
     assert not os.path.exists(run_in_folder)
+
+
+def test_curves_exported_as_hdf5_are_served_like_csv(run_in_folder, client):
+    import h5py
+
+    os.remove(os.path.join(run_in_folder, "curves", "curves.csv"))
+    with h5py.File(os.path.join(run_in_folder, "curves", "curves.h5"), "w") as fh:
+        fh["time"] = [0.0, 1.0]
+        fh.create_dataset("curve_names", data=["GEN1_generator_omegaPu"], dtype=h5py.string_dtype("ascii"))
+        fh["data"] = [[1.0], [0.99]]
+    body = client.get("/api/simulation/1/curves/data").json()
+    assert body == {"time": [0.0, 1.0], "signals": {"GEN1_generator_omegaPu": [1.0, 0.99]}}
+
+
+def test_a_run_without_curves_file_gives_404(run_in_folder, client):
+    os.remove(os.path.join(run_in_folder, "curves", "curves.csv"))
+    response = client.get("/api/simulation/1/curves/data")
+    assert response.status_code == 404
+    assert response.json()["detail"] == "No curves file found for this run"
