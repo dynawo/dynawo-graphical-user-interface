@@ -23,7 +23,7 @@ from pydantic import BaseModel
 
 from api.dependencies import get_session
 from api.session_store import UserSession
-from backend.curves_loader import load_curves_csv, read_crv_info
+from backend.curves_loader import load_curves, read_crv_info
 from backend.jobs_parser import (
     find_final_state_iidm,
     job_relative,
@@ -354,9 +354,9 @@ def get_curves_info(run_id: int, session: UserSession = Depends(get_session)):
 @router.get("/{run_id}/curves/data")
 def get_curves_data(run_id: int, session: UserSession = Depends(get_session)):
     run = _get_run(session, run_id)
-    df = load_curves_csv(_run_output_path(session, run))
+    df = load_curves(_run_output_path(session, run))
     if df is None:
-        raise HTTPException(status_code=404, detail="No curves CSV found for this run")
+        raise HTTPException(status_code=404, detail="No curves file found for this run")
 
     time_col = df.columns[0]
     signal_cols = list(df.columns[1:])
