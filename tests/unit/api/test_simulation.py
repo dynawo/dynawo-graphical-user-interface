@@ -73,3 +73,13 @@ def test_a_run_without_curves_file_gives_404(run_in_folder, client):
     response = client.get("/api/simulation/1/curves/data")
     assert response.status_code == 404
     assert response.json()["detail"] == "No curves file found for this run"
+
+
+def test_curves_exported_as_xml_are_served_like_csv(run_in_folder, client):
+    os.remove(os.path.join(run_in_folder, "curves", "curves.csv"))
+    with open(os.path.join(run_in_folder, "curves", "curves.xml"), "w") as fh:
+        fh.write('<curvesOutput xmlns="http://www.rte-france.com/dynawo">'
+                 '<curve model="GEN1" variable="generator_omegaPu">'
+                 '<point time="0" value="1"/><point time="1" value="0.99"/></curve></curvesOutput>')
+    body = client.get("/api/simulation/1/curves/data").json()
+    assert body == {"time": [0.0, 1.0], "signals": {"GEN1_generator_omegaPu": [1.0, 0.99]}}
