@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from 'vitest'
 import {
-  addableChildren, canRemove, getNode, insertChild, issuesAt, jobIndexes, moveChild,
+  addableChildren, canRemove, childIndexes, findPath, getNode, parseFieldRef, specAt, insertChild, issuesAt, jobIndexes, moveChild,
   parSetSource, referenceTo, removeChild, sessionPath, setAttribute, uniqueName,
   type ElementNode, type ElementSpec,
 } from './jobsTree'
@@ -111,5 +111,25 @@ describe('helpers', () => {
 
   it('lists the jobs of a file', () => {
     expect(jobIndexes(el('jobs', [{ comment: '' }, el('job'), el('job')]))).toEqual([1, 2])
+  })
+})
+
+describe('field references', () => {
+  it('parses a reference', () => {
+    expect(parseFieldRef('simulation@stopTime')).toEqual({ elements: ['simulation'], attribute: 'stopTime', list: false })
+    expect(parseFieldRef('modeler/dynModels@dydFile[]')).toEqual({ elements: ['modeler', 'dynModels'], attribute: 'dydFile', list: true })
+  })
+
+  it('finds the element of a reference, or null when one is missing', () => {
+    const job = el('job', [el('solver'), modeler()])
+    expect(findPath(job, [], ['modeler', 'dynModels'])).toEqual([1, 0])
+    expect(findPath(job, [], ['modeler', 'network'])).toBeNull()
+    expect(childIndexes(getNode(job, [1]), 'dynModels')).toEqual([0, 2])
+  })
+
+  it('finds the spec of a reference', () => {
+    const job = spec('job', 1, null, [modelerSpec])
+    expect(specAt(job, ['modeler', 'network'])?.name).toBe('network')
+    expect(specAt(job, ['modeler', 'nothing'])).toBeUndefined()
   })
 })

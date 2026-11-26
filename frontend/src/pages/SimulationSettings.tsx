@@ -13,7 +13,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
-  Alert, AutoComplete, Button, Card, Collapse, Dropdown, Empty, Form, Input, Modal,
+  Alert, Button, Card, Collapse, Dropdown, Empty, Form, Input, Modal,
   Popconfirm, Radio, Select, Space, Tabs, Tag, Tooltip, Typography,
 } from 'antd'
 import {
@@ -23,76 +23,22 @@ import {
 import client from '../api/client'
 import { errorDetail, errorStatus } from '../api/errors'
 import {
-  addableChildren, canRemove, childSpec, fileRefType, getNode, insertChild, isDynElement, isElement,
-  issuesAt, jobIndexes, jobNames, moveChild, parSetSource, referenceTo, removeChild, sessionPath,
-  setAttribute, uniqueName,
-  type AttributeSpec, type ElementNode, type ElementSpec, type Issue, type JobsDocument, type Path,
-  type Schema, type TreeNode,
+  addableChildren, canRemove, childSpec, elementLabel, getNode, insertChild, isDynElement, isElement,
+  issuesAt, jobIndexes, jobNames, moveChild, removeChild, setAttribute, uniqueName,
+  type ElementNode, type ElementSpec, type Issue, type JobsDocument, type Path,
+  type Schema, type SessionFile, type TreeNode,
 } from './jobsTree'
+import { AttributeField, type Ctx } from './jobsFields'
+import JobEssentials from './JobEssentials'
 
 const { Title, Text } = Typography
 
-interface SessionFile { name: string; ftype: string | null }
 interface ParseError { message: string; line: number | null; column: number | null }
 
 /** The 422 detail of an XML that does not parse, if that is what the error is. */
 function parseError(err: unknown): ParseError | null {
   const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
   return detail && typeof detail === 'object' && 'message' in detail ? detail as ParseError : null
-}
-
-/** What the form components share. */
-interface Ctx {
-  schema: Schema
-  issues: Issue[]
-  jobsFile: string
-  files: SessionFile[]
-  parSets: Record<string, string[]>
-  loadParSets: (file: string) => void
-  onAttr: (path: Path, name: string, value: string | undefined) => void
-  onAdd: (path: Path, schemaPath: string, spec: ElementSpec | undefined, child: ElementSpec) => void
-  onRemove: (path: Path, index: number) => void
-  onMove: (path: Path, index: number, delta: -1 | 1) => void
-}
-
-function elementLabel(schema: Schema, tag: string): string {
-  return schema.hints.elements[tag]?.label ?? tag
-}
-
-function AttributeField({ ctx, node, path, name, spec }: {
-  ctx: Ctx; node: ElementNode; path: Path; name: string; spec: AttributeSpec | undefined
-}) {
-  const value = node.attrs[name]
-  const hint = ctx.schema.hints.attributes[`${node.tag}@${name}`] ?? {}
-  const set = (v: string | undefined) => ctx.onAttr(path, name, v)
-  const ftype = fileRefType(ctx.schema.file_refs, node.tag, name)
-  const parFileAttr = parSetSource(ctx.schema.file_refs, node.tag, name)
-  const width = { width: 360 }
-
-  if (ftype !== undefined) {
-    const options = ctx.files
-      .filter(f => ftype === null || f.ftype === ftype)
-      .map(f => ({ value: referenceTo(ctx.jobsFile, f.name), label: f.name }))
-    return <AutoComplete style={width} value={value} options={options} onChange={set}
-      filterOption={(input, o) => (o?.label ?? '').toLowerCase().includes(input.toLowerCase())} />
-  }
-  if (parFileAttr && node.attrs[parFileAttr]) {
-    const parFile = sessionPath(ctx.jobsFile, node.attrs[parFileAttr])
-    const sets = ctx.parSets[parFile] ?? []
-    return <AutoComplete style={width} value={value} onChange={set}
-      onFocus={() => ctx.loadParSets(parFile)} options={sets.map(s => ({ value: s }))} />
-  }
-  if (spec?.type === 'enum' || spec?.type === 'boolean') {
-    const values = spec.type === 'enum' ? spec.values ?? [] : ['true', 'false']
-    return <Select style={{ width: 200 }} value={value} allowClear={!spec.required}
-      onChange={v => set(v ?? undefined)} options={values.map(v => ({ value: v }))} />
-  }
-  if (hint.values) {
-    return <AutoComplete style={width} value={value} onChange={set} options={hint.values.map(v => ({ value: v }))} />
-  }
-  return <Input style={width} value={value} onChange={e => set(e.target.value)}
-    inputMode={spec?.type === 'number' || spec?.type === 'integer' ? 'decimal' : undefined}
-    suffix={hint.unit ? <Text type="secondary">{hint.unit}</Text> : undefined} />
 }
 
 function Attributes({ ctx, node, path, spec }: { ctx: Ctx; node: ElementNode; path: Path; spec: ElementSpec | undefined }) {
@@ -427,6 +373,17 @@ export default function SimulationSettings() {
     })
   }
 
+  // Ctrl+S saves; the listener reads the latest handler through a ref.
+  const saveRef = useRef<() => void>(() => {})
+  useEffect(() => { saveRef.current = () => { if (dirty && !saving) handleSave() } })
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveRef.current() }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
   const handleRestore = async () => {
     if (!jobsFile) return
     try {
@@ -524,6 +481,8 @@ export default function SimulationSettings() {
 
   const formTab = ctx && doc && job ? (
     <Space orientation="vertical" style={{ width: '100%' }} size={12}>
+      <JobEssentials ctx={ctx} root={doc.root} jobIndex={jobIndex!} jobSpec={jobSpec} newNode={newNode} onEdit={edit} />
+      <Text strong style={{ marginTop: 8 }}>All settings</Text>
       <Card size="small" title={<Space>{elementLabel(ctx.schema, 'job')}<Text type="secondary" code>job</Text></Space>}>
         <div id={`node-${jobIndex}`}>
           <ElementIssues ctx={ctx} path={[jobIndex!]} />
