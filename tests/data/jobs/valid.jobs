@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A job valid against tests/data/xsd/jobs.xsd, with comments. -->
+<dyn:jobs xmlns:dyn="http://www.rte-france.com/dynawo">
+  <dyn:job name="case">
+    <dyn:solver lib="dynawo_SolverIDA" parFile="network_and_solver.par" parId="IDA"/>
+    <dyn:modeler compileDir="outputs/compilation">
+      <dyn:network iidmFile="network.iidm" parFile="network_and_solver.par" parId="Network"/>
+      <!-- the events -->
+      <dyn:dynModels dydFile="events.dyd"/>
+      <dyn:precompiledModels useStandardModels="true"/>
+      <dyn:modelicaModels useStandardModels="false"/>
+    </dyn:modeler>
+    <dyn:simulation startTime="0" stopTime="10"/>
+    <dyn:outputs directory="outputs">
+      <dyn:timeline exportMode="XML"/>
+      <dyn:finalState exportIIDMFile="true"/>
+    </dyn:outputs>
+  </dyn:job>
+</dyn:jobs>
