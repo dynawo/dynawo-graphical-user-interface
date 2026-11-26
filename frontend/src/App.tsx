@@ -11,7 +11,7 @@
 import { useEffect, useState } from 'react'
 import { BrowserRouter, useLocation, useNavigate, Route, Routes } from 'react-router-dom'
 import { ConfigProvider, Layout, Menu, Button, Popconfirm, theme, Tooltip, Typography } from 'antd'
-import { ApartmentOutlined, ClearOutlined, ClusterOutlined, CloudUploadOutlined, DownloadOutlined, EditOutlined, InfoCircleOutlined, LineChartOutlined, MoonOutlined, PlayCircleOutlined, SettingOutlined, SunOutlined, ThunderboltOutlined, ToolOutlined, WarningOutlined } from '@ant-design/icons'
+import { ApartmentOutlined, ClearOutlined, ControlOutlined, ClusterOutlined, CloudUploadOutlined, DownloadOutlined, EditOutlined, InfoCircleOutlined, LineChartOutlined, MoonOutlined, PlayCircleOutlined, SettingOutlined, SunOutlined, ThunderboltOutlined, ToolOutlined, WarningOutlined } from '@ant-design/icons'
 import client from './api/client'
 
 // Module-level promise — created once regardless of StrictMode double-mount.
@@ -32,6 +32,7 @@ import EditSolverParameters from './pages/EditSolverParameters'
 import LoadFlow from './pages/LoadFlow'
 import NetworkView from './pages/NetworkView'
 import RunSimulation from './pages/RunSimulation'
+import SimulationSettings from './pages/SimulationSettings'
 
 const { Sider, Content, Header } = Layout
 
@@ -58,6 +59,7 @@ const NAV_ITEMS = [
   { key: '/network-view',           label: 'Network View',          icon: <ApartmentOutlined /> },
   { key: '/load-flow',              label: 'Load Flow / DynaFlow',  icon: <ThunderboltOutlined /> },
   { key: '/dynamic-association',    label: 'Dynamic Association',   icon: <ClusterOutlined /> },
+  { key: '/simulation-settings',    label: 'Simulation Settings',   icon: <ControlOutlined /> },
   { key: '/edit-parameters',        label: 'Edit Parameters',       icon: <EditOutlined /> },
   { key: '/edit-solver-parameters', label: 'Edit Solver Params',    icon: <ToolOutlined /> },
   { key: '/edit-curves',            label: 'Edit Curves',           icon: <LineChartOutlined /> },
@@ -157,6 +159,7 @@ function AppLayout({ isDark, toggleTheme }: { isDark: boolean; toggleTheme: () =
             <Route path="/network-view" element={<NetworkView />} />
             <Route path="/load-flow" element={<LoadFlow />} />
             <Route path="/dynamic-association" element={<DynamicAssociation />} />
+            <Route path="/simulation-settings" element={<SimulationSettings />} />
             <Route path="/edit-parameters" element={<EditParameters />} />
             <Route path="/edit-solver-parameters" element={<EditSolverParameters />} />
             <Route path="/edit-curves" element={<EditCurves />} />
