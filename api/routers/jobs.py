@@ -27,6 +27,7 @@ from backend.jobs_document import (
     render,
     write,
 )
+from backend.jobs_hints import load_hints, new_element
 from backend.jobs_schema import JobsSchema
 
 router = APIRouter(tags=["jobs"])
@@ -93,13 +94,23 @@ class CreateRequest(BaseModel):
 
 @router.get("/schema")
 def get_schema(session: UserSession = Depends(get_session)):
-    """Schema of the selected Dynawo, and the attributes that name files."""
+    """Schema of the selected Dynawo, the attributes that name files, and the hints."""
     schema = _schema(session)
     return {
         "dynawo": session.dynawo_executable,
         **schema.to_dict(),
         "file_refs": [{"element": e, "attribute": a, "ftype": t} for (e, a), t in FILE_REFS.items()],
+        "hints": load_hints(),
     }
+
+
+@router.get("/new")
+def get_new(path: str, session: UserSession = Depends(get_session)):
+    """New element at a schema path, e.g. "jobs/job" or "jobs/job/outputs/timeline"."""
+    spec = _schema(session).find(path)
+    if spec is None:
+        raise HTTPException(status_code=404, detail=f"{path} is not in the schema")
+    return {"node": new_element(spec)}
 
 
 @router.get("/file/{jobs_file:path}")
