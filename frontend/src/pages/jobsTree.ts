@@ -297,3 +297,60 @@ export function fileOptions(files: SessionFile[], jobsFile: string, ftype: strin
     .filter(f => ftype === null || f.ftype === ftype)
     .map(f => ({ value: referenceTo(jobsFile, f.name), label: f.name }))
 }
+
+/** Differences between the saved and the edited tree; keys are paths in the edited tree. */
+export interface TreeDiff {
+  changedAttrs: Set<string>  // "0/1/2@dydFile": attribute added or changed
+  newElements: Set<string>   // "0/3/1": element not in the saved tree
+  count: number              // attributes and elements added, changed or removed
+}
+
+const pathKey = (path: Path) => path.join('/')
+
+/** Compare two trees; children are matched by tag, in order. */
+export function diffTree(saved: ElementNode, edited: ElementNode): TreeDiff {
+  const diff: TreeDiff = { changedAttrs: new Set(), newElements: new Set(), count: 0 }
+  const countElements = (node: ElementNode): number =>
+    1 + node.children.reduce((n, c) => n + (isElement(c) ? countElements(c) : 0), 0)
+
+  const walk = (a: ElementNode, b: ElementNode, path: Path) => {
+    const key = pathKey(path)
+    for (const [name, value] of Object.entries(b.attrs)) {
+      if (a.attrs[name] !== value) { diff.changedAttrs.add(`${key}@${name}`); diff.count++ }
+    }
+    diff.count += Object.keys(a.attrs).filter(name => !(name in b.attrs)).length
+    const seen: Record<string, number> = {}
+    const savedByTag: Record<string, ElementNode[]> = {}
+    for (const c of a.children) if (isElement(c)) (savedByTag[c.tag] ??= []).push(c)
+    b.children.forEach((c, i) => {
+      if (!isElement(c)) return
+      const k = seen[c.tag] = (seen[c.tag] ?? -1) + 1
+      const match = savedByTag[c.tag]?.[k]
+      if (match) walk(match, c, [...path, i])
+      else { diff.newElements.add(pathKey([...path, i])); diff.count += countElements(c) }
+    })
+    for (const [tag, list] of Object.entries(savedByTag)) {
+      for (const removed of list.slice((seen[tag] ?? -1) + 1)) diff.count += countElements(removed)
+    }
+  }
+  walk(saved, edited, [])
+  return diff
+}
+
+/** Whether an attribute, or the element itself, was added or changed. */
+export function isChanged(diff: TreeDiff | null, path: Path, attribute?: string): boolean {
+  if (!diff) return false
+  const key = pathKey(path)
+  return attribute === undefined ? diff.newElements.has(key) : diff.changedAttrs.has(`${key}@${attribute}`)
+}
+
+/** Whether anything at or under `path` was added or changed. */
+export function hasChangesUnder(diff: TreeDiff | null, path: Path): boolean {
+  if (!diff) return false
+  const key = pathKey(path)
+  const under = (k: string) => k === key || k.startsWith(`${key}/`) || k.startsWith(`${key}@`)
+  return [...diff.newElements].some(under) || [...diff.changedAttrs].some(under)
+}
+
+/** Style of a form item changed since the last save. */
+export const CHANGED_STYLE = { borderLeft: '3px solid #1677ff', paddingLeft: 8, marginLeft: -11 }

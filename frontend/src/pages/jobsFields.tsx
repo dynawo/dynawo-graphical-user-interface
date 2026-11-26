@@ -14,6 +14,7 @@ import { AutoComplete, Input, Segmented, Select, Switch, Typography } from 'antd
 import {
   fileOptions, fileRefType, parSetSource, sessionPath,
   type AttributeSpec, type ElementNode, type ElementSpec, type Issue, type Path, type Schema, type SessionFile,
+  type TreeDiff,
 } from './jobsTree'
 
 const { Text } = Typography
@@ -26,6 +27,7 @@ export interface Ctx {
   files: SessionFile[]
   parSets: Record<string, string[]>
   loadParSets: (file: string) => void
+  diff: TreeDiff | null  // changes since the last save
   onAttr: (path: Path, name: string, value: string | undefined) => void
   onAdd: (path: Path, schemaPath: string, spec: ElementSpec | undefined, child: ElementSpec) => void
   onRemove: (path: Path, index: number) => void
