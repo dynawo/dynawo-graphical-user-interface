@@ -14,6 +14,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 
+from backend.jobs_schema import JobsSchema, schema_for_executable
 from backend.models import ChangeLogEntry, CrvChangeLogEntry, RunRecord, StagedEvent
 from backend.session_manager import SessionDir, SessionManager
 from backend.user_config import get_default_executable
@@ -30,8 +31,12 @@ class UserSession:
     network: object | None = None
     network_name: str | None = None
 
-    # Dynawo executable
+    # Dynawo executable; setting it reloads jobs_schema.
     dynawo_executable: str | None = None
+
+    # Schema of the selected Dynawo's jobs.xsd, or why it could not be loaded.
+    jobs_schema: JobsSchema | None = None
+    jobs_schema_error: str | None = None
 
     # Uploaded files metadata (mirrors st.session_state["uploaded_files_info"])
     uploaded_files_info: dict = field(default_factory=dict)
@@ -101,6 +106,18 @@ class UserSession:
     crv_change_log: list[CrvChangeLogEntry] = field(default_factory=list)
 
     last_active: float = field(default_factory=time.time)
+
+    def __post_init__(self) -> None:
+        self._load_jobs_schema()
+
+    def __setattr__(self, name: str, value) -> None:
+        super().__setattr__(name, value)
+        # Skipped during __init__: __post_init__ does the first load.
+        if name == "dynawo_executable" and "jobs_schema_error" in self.__dict__:
+            self._load_jobs_schema()
+
+    def _load_jobs_schema(self) -> None:
+        self.jobs_schema, self.jobs_schema_error = schema_for_executable(self.dynawo_executable)
 
 
 class SessionStore:
