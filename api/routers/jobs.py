@@ -29,6 +29,7 @@ from backend.jobs_document import (
 )
 from backend.jobs_hints import load_hints, new_element
 from backend.jobs_schema import JobsSchema
+from backend.par_parser import parse_par
 
 router = APIRouter(tags=["jobs"])
 
@@ -55,10 +56,16 @@ def _context(session: UserSession, jobs_file: str | None) -> SessionContext | No
     return SessionContext(sm.working_dir, jobs_file, {name: info.ftype for name, info in sm.files.items()})
 
 
-def _register(session: UserSession, jobs_file: str) -> None:
-    """Refresh the session's records of a written file."""
-    info = session.session_manager.register_existing_file(jobs_file)
+def _register(session: UserSession, jobs_file: str, created: bool = False) -> None:
+    """Refresh the session's records of a written file; a created file's content becomes its original."""
+    sm = session.session_manager
+    info = sm.register_existing_file(jobs_file) if created else sm.refresh_info(jobs_file)
     session.uploaded_files_info.setdefault(jobs_file, {}).update(size=info.size, ftype=info.ftype)
+
+
+def _modified(session: UserSession, jobs_file: str, content: bytes) -> bool:
+    original = session.session_manager.get_raw(jobs_file)
+    return original is not None and original != content
 
 
 def _parse_error(exc: JobsDocumentError) -> HTTPException:
@@ -113,6 +120,16 @@ def get_new(path: str, session: UserSession = Depends(get_session)):
     return {"node": new_element(spec)}
 
 
+@router.get("/par-sets/{par_file:path}")
+def get_par_sets(par_file: str, session: UserSession = Depends(get_session)):
+    """Set ids of a .par file of the session."""
+    info = session.session_manager.files.get(par_file)
+    if info is None or info.ftype != "par":
+        raise HTTPException(status_code=404, detail=f"{par_file} is not a .par file of the session")
+    with open(session.session_manager.get_path(par_file), "rb") as fh:
+        return list(parse_par(fh.read()))
+
+
 @router.get("/file/{jobs_file:path}")
 def get_file(jobs_file: str, session: UserSession = Depends(get_session)):
     """Document and token of a jobs file; its raw text and the error when it does not parse."""
@@ -120,12 +137,14 @@ def get_file(jobs_file: str, session: UserSession = Depends(get_session)):
     with open(path, "rb") as fh:
         content = fh.read()
     token = file_token(content)
+    modified = _modified(session, jobs_file, content)
     try:
-        return {"document": parse(content), "token": token}
+        return {"document": parse(content), "token": token, "modified": modified}
     except JobsDocumentError as exc:
         return {
             "document": None,
             "token": token,
+            "modified": modified,
             "text": content.decode("utf-8", errors="replace"),
             "error": {"message": str(exc), "line": exc.line, "column": exc.column},
         }
@@ -174,7 +193,22 @@ def put_file(req: SaveRequest, session: UserSession = Depends(get_session)):
     except JobsDocumentError as exc:
         raise _parse_error(exc)
     _register(session, req.jobs_file)
-    return {"document": document, "token": token, "issues": issues}
+    with open(path, "rb") as fh:
+        modified = _modified(session, req.jobs_file, fh.read())
+    return {"document": document, "token": token, "issues": issues, "modified": modified}
+
+
+@router.post("/restore/{jobs_file:path}")
+def restore_file(jobs_file: str, session: UserSession = Depends(get_session)):
+    """Write back the content the file had when it entered the session."""
+    path = _jobs_path(session, jobs_file)
+    original = session.session_manager.get_raw(jobs_file)
+    if original is None:
+        raise HTTPException(status_code=404, detail=f"No original content for {jobs_file}")
+    with open(path, "wb") as fh:
+        fh.write(original)
+    _register(session, jobs_file)
+    return {"ok": True}
 
 
 @router.post("/file")
@@ -196,5 +230,5 @@ def create_file(req: CreateRequest, session: UserSession = Depends(get_session))
         raise HTTPException(status_code=409, detail=str(exc))
     except JobsDocumentError as exc:
         raise _parse_error(exc)
-    _register(session, req.jobs_file)
+    _register(session, req.jobs_file, created=True)
     return {"document": document, "token": token, "issues": issues}

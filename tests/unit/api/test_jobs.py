@@ -113,7 +113,7 @@ def test_check_gives_errors_and_warnings(client, case):
     _simulation(document)["attrs"]["startTime"] = "abc"
     body = client.post("/api/jobs/check", json={"document": document, "jobs_file": "valid.jobs"}).json()
     levels = {(i["level"], i.get("attribute")) for i in body["issues"]}
-    assert ("error", None) in levels  # startTime is not a float
+    assert ("error", "startTime") in levels  # not a float
     assert ("warning", "iidmFile") in levels  # network.iidm was not uploaded
 
 
@@ -158,12 +158,40 @@ def test_save_refuses_a_root_other_than_jobs(client, case):
     assert response.status_code == 422
 
 
-def test_save_refreshes_the_session_record(client, case, session_store):
+def test_save_refreshes_the_size_and_keeps_the_original(client, case, session_store):
     body = _get(client)
-    _simulation(body["document"])["attrs"]["stopTime"] = "30"
-    client.put("/api/jobs/file", json={"jobs_file": "valid.jobs", **body})
+    assert body["modified"] is False
+    _simulation(body["document"])["attrs"]["stopTime"] = "30000"
+    saved = client.put("/api/jobs/file", json={"jobs_file": "valid.jobs", **body}).json()
+    assert saved["modified"] is True
     (session,) = session_store._sessions.values()
-    assert b'stopTime="30"' in session.session_manager.get_raw("valid.jobs")
+    path = session.session_manager.get_path("valid.jobs")
+    assert session.uploaded_files_info["valid.jobs"]["size"] == len(open(path, "rb").read())
+    assert b'stopTime="10"' in session.session_manager.get_raw("valid.jobs")
+
+
+def test_restore_gives_back_the_original(client, case):
+    body = _get(client)
+    original = _simulation(body["document"])["attrs"]["stopTime"]
+    for stop in ("30", "40"):  # saved twice: restore goes back past both
+        body = _get(client)
+        _simulation(body["document"])["attrs"]["stopTime"] = stop
+        client.put("/api/jobs/file", json={"jobs_file": "valid.jobs", **body})
+    assert client.post("/api/jobs/restore/valid.jobs").status_code == 200
+    restored = _get(client)
+    assert _simulation(restored["document"])["attrs"]["stopTime"] == original
+    assert restored["modified"] is False
+
+
+def test_a_created_file_restores_to_its_created_content(client, case):
+    document = _get(client)["document"]
+    client.post("/api/jobs/file", json={"jobs_file": "new.jobs", "document": document})
+    body = _get(client, "new.jobs")
+    assert body["modified"] is False
+    _simulation(body["document"])["attrs"]["stopTime"] = "99"
+    client.put("/api/jobs/file", json={"jobs_file": "new.jobs", **body})
+    client.post("/api/jobs/restore/new.jobs")
+    assert _simulation(_get(client, "new.jobs")["document"])["attrs"]["stopTime"] == "10"
 
 
 # ── Creating ─────────────────────────────────────────────────────────────────
@@ -184,3 +212,8 @@ def test_create_a_jobs_file(client, case):
 def test_create_refuses_a_bad_name(client, case, name, status):
     document = _get(client)["document"]
     assert client.post("/api/jobs/file", json={"jobs_file": name, "document": document}).status_code == status
+
+
+def test_par_sets(client, case):
+    assert client.get("/api/jobs/par-sets/network_and_solver.par").json() == ["Network", "IDA"]
+    assert client.get("/api/jobs/par-sets/valid.jobs").status_code == 404
