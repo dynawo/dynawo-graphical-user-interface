@@ -13,6 +13,7 @@ import {
   ApartmentOutlined,
   CloudUploadOutlined,
   ClusterOutlined,
+  ControlOutlined,
   EditOutlined,
   LineChartOutlined,
   PlayCircleOutlined,
@@ -53,6 +54,12 @@ const STEPS = [
     icon: <ClusterOutlined />,
     description: 'Put dynamic models and automation systems on the network elements with rules, and generate '
       + 'the Dynawo job with PowSyBl; rebuild rules from a .dyd, save them, export a Python script.',
+  },
+  {
+    title: 'Simulation Settings',
+    icon: <ControlOutlined />,
+    description: 'Edit the job (.jobs): time window, solver, models, outputs and logs, with a form checked '
+      + 'against the selected Dynawo version; create new jobs and jobs files.',
   },
   {
     title: 'Edit Parameters',
