@@ -10,11 +10,11 @@
 
 // Simulation Settings page: edits .jobs files with a form built from the selected Dynawo's jobs.xsd.
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Alert, Button, Card, Collapse, Dropdown, Empty, Form, Input, Modal,
-  Popconfirm, Radio, Select, Space, Tabs, Tag, Tooltip, Typography,
+  Popconfirm, Radio, Select, Space, Tabs, Tag, Tooltip, Typography, theme,
 } from 'antd'
 import {
   ArrowDownOutlined, ArrowUpOutlined, CloseCircleOutlined, CopyOutlined, DeleteOutlined,
@@ -23,13 +23,14 @@ import {
 import client from '../api/client'
 import { errorDetail, errorStatus } from '../api/errors'
 import {
-  addableChildren, canRemove, childSpec, elementLabel, getNode, insertChild, isDynElement, isElement,
+  CHANGED_STYLE, addableChildren, canRemove, childSpec, diffTree, elementLabel, getNode, hasChangesUnder, isChanged, insertChild, isDynElement, isElement,
   issuesAt, jobIndexes, jobNames, moveChild, removeChild, setAttribute, uniqueName,
   type ElementNode, type ElementSpec, type Issue, type JobsDocument, type Path,
   type Schema, type SessionFile, type TreeNode,
 } from './jobsTree'
 import { AttributeField, type Ctx } from './jobsFields'
 import JobEssentials from './JobEssentials'
+import { setUnsavedChanges } from '../unsavedChanges'
 
 const { Title, Text } = Typography
 
@@ -58,7 +59,8 @@ function Attributes({ ctx, node, path, spec }: { ctx: Ctx; node: ElementNode; pa
         const own = issues.filter(i => i.attribute === name)
         const status = own.some(i => i.level === 'error') ? 'error' : own.length ? 'warning' : undefined
         return (
-          <Form.Item key={name} style={{ marginBottom: 8 }} validateStatus={status}
+          <Form.Item key={name} style={{ marginBottom: 8, ...(isChanged(ctx.diff, path, name) ? CHANGED_STYLE : {}) }}
+            validateStatus={status}
             help={own.length ? own.map(i => i.message).join(' · ') : undefined}
             extra={hint.help}
             label={<Tooltip title={name}><span>{hint.label ?? name}</span></Tooltip>}>
@@ -141,12 +143,14 @@ function ChildElement({ ctx, parent, parentSpec, path, index, child, schemaPath 
   const spec = childSpec(parentSpec, child)
   const repeatable = spec ? spec.max !== 1 : false
   const childPath = [...path, index]
+  const added = isChanged(ctx.diff, childPath)
   return (
-    <Card size="small" style={{ marginBottom: 8 }}
+    <Card size="small" style={{ marginBottom: 8, ...(added ? { borderColor: CHANGED_COLOR } : {}) }}
       title={<Space>
         {elementLabel(ctx.schema, child.tag)}
         <Text type="secondary" code>{child.tag}</Text>
         {!spec && <Tag color="orange">unknown to this Dynawo</Tag>}
+        {added ? <Tag color="blue">new</Tag> : hasChangesUnder(ctx.diff, childPath) && <ChangedDot />}
       </Space>}
       extra={<Space size={0}>
         {repeatable && <Button type="text" size="small" icon={<ArrowUpOutlined />} onClick={() => ctx.onMove(path, index, -1)} />}
@@ -159,6 +163,14 @@ function ChildElement({ ctx, parent, parentSpec, path, index, child, schemaPath 
       <ElementBody ctx={ctx} node={child} path={childPath} schemaPath={`${schemaPath}/${child.tag}`} spec={spec} />
     </Card>
   )
+}
+
+const CHANGED_COLOR = '#1677ff'
+
+function ChangedDot() {
+  return <Tooltip title="Changed, not saved"><span style={{
+    display: 'inline-block', width: 8, height: 8, borderRadius: 4, background: CHANGED_COLOR,
+  }} /></Tooltip>
 }
 
 function issueLocation(schema: Schema, root: ElementNode, path: Path): string {
@@ -174,6 +186,8 @@ function issueLocation(schema: Schema, root: ElementNode, path: Path): string {
 
 export default function SimulationSettings() {
   const navigate = useNavigate()
+  const { token: themeToken } = theme.useToken()
+  const [modal, modalContext] = Modal.useModal()
   const [searchParams] = useSearchParams()
   const [schema, setSchema] = useState<Schema | null>(null)
   const [schemaError, setSchemaError] = useState<string | null>(null)
@@ -184,7 +198,7 @@ export default function SimulationSettings() {
   const [issues, setIssues] = useState<Issue[]>([])
   const [jobIndex, setJobIndex] = useState<number | null>(null)
   const [openPanels, setOpenPanels] = useState<string[]>([])
-  const [dirty, setDirty] = useState(false)
+  const [saved, setSaved] = useState<JobsDocument | null>(null)  // document as last read or saved
   const [modified, setModified] = useState(false)  // file on disk differs from its original
   const [tab, setTab] = useState<'form' | 'xml'>('form')
   const [xmlText, setXmlText] = useState('')
@@ -216,11 +230,11 @@ export default function SimulationSettings() {
       setError(null); setSuccess(null); setConflict(null); setXmlError(null)
       setToken(res.data.token)
       setModified(res.data.modified)
-      setDirty(false)
       setXmlDirty(false)
       if (!res.data.document) {
         // The file on disk does not parse: open it as text so it can be fixed.
         setDoc(null)
+        setSaved(null)
         setIssues([])
         setXmlText(res.data.text ?? '')
         setXmlError(res.data.error ?? null)
@@ -230,6 +244,7 @@ export default function SimulationSettings() {
       const checked = await client.post<{ document: JobsDocument; issues: Issue[] }>(
         '/jobs/check', { document: res.data.document, jobs_file: name })
       setDoc(checked.data.document)
+      setSaved(checked.data.document)
       setIssues(checked.data.issues)
       setJobIndex(jobIndexes(checked.data.document.root)[0] ?? null)
       setTab('form')
@@ -259,6 +274,20 @@ export default function SimulationSettings() {
       .catch(err => setSchemaError(errorDetail(err, 'Could not load the jobs schema')))
   }, [])
 
+  // Unsaved: the form differs from the saved document, or the XML text was edited.
+  const diff = useMemo(() => (doc && saved ? diffTree(saved.root, doc.root) : null), [doc, saved])
+  const dirty = xmlDirty || (diff?.count ?? 0) > 0
+
+  // Leaving the page asks first: the menu reads this, the browser gets beforeunload.
+  useEffect(() => {
+    setUnsavedChanges(dirty && jobsFile ? `Your changes to ${jobsFile} are not saved` : null)
+    if (!dirty) return
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = '' }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [dirty, jobsFile])
+  useEffect(() => () => setUnsavedChanges(null), [])
+
   // Live check of the edited document; results of an older version are dropped.
   useEffect(() => {
     if (!dirty || !doc || !jobsFile || tab !== 'form') return
@@ -274,7 +303,6 @@ export default function SimulationSettings() {
 
   const edit = (fn: (root: ElementNode) => ElementNode) => {
     setDoc(d => (d ? { ...d, root: fn(d.root) } : d))
-    setDirty(true)
     setSuccess(null)
   }
 
@@ -290,7 +318,7 @@ export default function SimulationSettings() {
 
   const confirmDiscard = (then: () => void) => {
     if (!dirty) return then()
-    Modal.confirm({ title: 'Discard the unsaved changes?', okText: 'Discard', okButtonProps: { danger: true }, onOk: then })
+    modal.confirm({ title: 'Discard the unsaved changes?', okText: 'Discard', okButtonProps: { danger: true }, onOk: then })
   }
 
   // ── XML tab ────────────────────────────────────────────────────────────────
@@ -343,7 +371,8 @@ export default function SimulationSettings() {
       setToken(res.data.token)
       setModified(res.data.modified)
       setIssues(res.data.issues)
-      setDirty(false)
+      setSaved(res.data.document)
+      setXmlDirty(false)
       if (tab === 'xml') {
         const rendered = await client.post<{ text: string }>('/jobs/render', { document: res.data.document })
         setXmlText(rendered.data.text)
@@ -365,7 +394,7 @@ export default function SimulationSettings() {
     setIssues(res.data.issues)
     const errors = res.data.issues.filter(i => i.level === 'error').length
     if (!errors) return doSave(document)
-    Modal.confirm({
+    modal.confirm({
       title: `${errors} error${errors > 1 ? 's' : ''} against the Dynawo schema`,
       content: 'Dynawo will most likely refuse this file. Save anyway?',
       okText: 'Save anyway',
@@ -433,7 +462,7 @@ export default function SimulationSettings() {
       setNewFileOpen(false)
       confirmDiscard(() => openFile(name))
     } catch (err) {
-      Modal.error({ title: 'Could not create the file', content: errorDetail(err, 'Error') })
+      modal.error({ title: 'Could not create the file', content: errorDetail(err, 'Error') })
     }
   }
 
@@ -455,7 +484,7 @@ export default function SimulationSettings() {
   const warnings = issues.length - errors
 
   const ctx: Ctx | null = schema && jobsFile ? {
-    schema, issues, jobsFile, files, parSets, loadParSets,
+    schema, issues, jobsFile, files, parSets, loadParSets, diff,
     onAttr: (path, name, value) => edit(root => setAttribute(root, path, name, value)),
     onAdd: async (path, schemaPath, spec, child) => {
       const node = await newNode(`${schemaPath}/${child.name}`)
@@ -481,7 +510,7 @@ export default function SimulationSettings() {
 
   const formTab = ctx && doc && job ? (
     <Space orientation="vertical" style={{ width: '100%' }} size={12}>
-      <JobEssentials ctx={ctx} root={doc.root} jobIndex={jobIndex!} jobSpec={jobSpec} newNode={newNode} onEdit={edit} />
+      <JobEssentials ctx={ctx} root={doc.root} savedRoot={saved?.root ?? null} jobIndex={jobIndex!} jobSpec={jobSpec} newNode={newNode} onEdit={edit} />
       <Text strong style={{ marginTop: 8 }}>All settings</Text>
       <Card size="small" title={<Space>{elementLabel(ctx.schema, 'job')}<Text type="secondary" code>job</Text></Space>}>
         <div id={`node-${jobIndex}`}>
@@ -503,6 +532,7 @@ export default function SimulationSettings() {
               {!isDynElement(child) || !spec ? <Tag color="orange">unknown to this Dynawo</Tag> : null}
               {own.some(x => x.level === 'error') && <CloseCircleOutlined style={{ color: '#ff4d4f' }} />}
               {!own.some(x => x.level === 'error') && own.length > 0 && <WarningOutlined style={{ color: '#faad14' }} />}
+              {isChanged(diff, path) ? <Tag color="blue">new</Tag> : hasChangesUnder(diff, path) && <ChangedDot />}
             </Space>,
             extra: canRemove(job, jobSpec, child.tag) ? (
               <Button type="text" size="small" danger icon={<DeleteOutlined />}
@@ -524,12 +554,13 @@ export default function SimulationSettings() {
       )}
       <Input.TextArea value={xmlText} autoSize={{ minRows: 20 }} spellCheck={false}
         style={{ fontFamily: 'monospace', fontSize: 13 }}
-        onChange={e => { setXmlText(e.target.value); setXmlDirty(true); setDirty(true); setSuccess(null) }} />
+        onChange={e => { setXmlText(e.target.value); setXmlDirty(true); setSuccess(null) }} />
     </Space>
   )
 
   return (
     <div style={{ maxWidth: 1100 }}>
+      {modalContext}
       <Title level={3}>Simulation Settings <Text type="secondary">(.jobs file)</Text></Title>
 
       <Card size="small" style={{ marginBottom: 16 }}>
@@ -579,16 +610,11 @@ export default function SimulationSettings() {
           <div style={{ flex: 1, minWidth: 0 }}>
             <Tabs activeKey={tab} onChange={changeTab}
               tabBarExtraContent={<Space>
-                {dirty && <Tag color="blue">unsaved</Tag>}
-                <Tooltip title="Drop the changes not saved yet">
-                  <Button icon={<RollbackOutlined />} disabled={!dirty} onClick={() => jobsFile && loadFile(jobsFile)}>Discard</Button>
-                </Tooltip>
                 <Popconfirm title="Restore the original file?"
                   description="The file goes back to its content when it entered the session; all saved changes are lost."
                   okText="Restore" okButtonProps={{ danger: true }} onConfirm={handleRestore} disabled={!modified}>
                   <Button icon={<HistoryOutlined />} disabled={!modified}>Restore original</Button>
                 </Popconfirm>
-                <Button type="primary" icon={<SaveOutlined />} loading={saving} disabled={!dirty} onClick={handleSave}>Save</Button>
               </Space>}
               items={[
                 { key: 'form', label: 'Form', children: formTab, disabled: !doc && !xmlDirty },
@@ -623,6 +649,26 @@ export default function SimulationSettings() {
               </div>
             )}
           </Card>
+        </div>
+      )}
+
+      {dirty && (
+        <div style={{
+          position: 'sticky', bottom: 0, zIndex: 10, marginTop: 16, padding: '10px 16px',
+          display: 'flex', alignItems: 'center', gap: 12, borderRadius: themeToken.borderRadius,
+          background: themeToken.colorBgElevated, border: `1px solid ${CHANGED_COLOR}`,
+          boxShadow: '0 -2px 12px rgba(0, 0, 0, 0.15)',
+        }}>
+          <ChangedDot />
+          <Text strong>Unsaved changes to {jobsFile}</Text>
+          <Text type="secondary">
+            {xmlDirty ? 'XML edited' : `${diff?.count ?? 0} change${(diff?.count ?? 0) > 1 ? 's' : ''}`}
+          </Text>
+          <div style={{ flex: 1 }} />
+          <Button icon={<RollbackOutlined />} onClick={() => jobsFile && loadFile(jobsFile)}>Discard</Button>
+          <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={handleSave}>
+            Save <Text keyboard style={{ color: 'inherit', fontSize: 11 }}>Ctrl+S</Text>
+          </Button>
         </div>
       )}
 

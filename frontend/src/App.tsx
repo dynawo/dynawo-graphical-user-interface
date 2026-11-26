@@ -10,9 +10,10 @@
 
 import { useEffect, useState } from 'react'
 import { BrowserRouter, useLocation, useNavigate, Route, Routes } from 'react-router-dom'
-import { ConfigProvider, Layout, Menu, Button, Popconfirm, theme, Tooltip, Typography } from 'antd'
+import { ConfigProvider, Layout, Menu, Button, Modal, Popconfirm, theme, Tooltip, Typography } from 'antd'
 import { ApartmentOutlined, ClearOutlined, ControlOutlined, ClusterOutlined, CloudUploadOutlined, DownloadOutlined, EditOutlined, InfoCircleOutlined, LineChartOutlined, MoonOutlined, PlayCircleOutlined, SettingOutlined, SunOutlined, ThunderboltOutlined, ToolOutlined, WarningOutlined } from '@ant-design/icons'
 import client from './api/client'
+import { setUnsavedChanges, unsavedChanges } from './unsavedChanges'
 
 // Module-level promise — created once regardless of StrictMode double-mount.
 // Ensures exactly one session-init request is made on app startup.
@@ -72,6 +73,7 @@ function AppLayout({ isDark, toggleTheme }: { isDark: boolean; toggleTheme: () =
   const location = useLocation()
   const navigate = useNavigate()
   const { token } = theme.useToken()
+  const [modal, modalContext] = Modal.useModal()
 
   const headerBg   = isDark ? '#141414' : '#ffffff'
   const headerBorder = isDark ? '#303030' : '#f0f0f0'
@@ -79,6 +81,7 @@ function AppLayout({ isDark, toggleTheme }: { isDark: boolean; toggleTheme: () =
 
   return (
     <Layout style={{ height: '100vh', overflow: 'hidden' }}>
+      {modalContext}
       <Sider theme="dark" width={220} style={{ borderRight: '1px solid #1f1f1f', overflow: 'hidden' }}>
         <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
           <div style={{ padding: '16px 24px', borderBottom: '1px solid #303030', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -93,7 +96,18 @@ function AppLayout({ isDark, toggleTheme }: { isDark: boolean; toggleTheme: () =
               mode="inline"
               selectedKeys={[location.pathname]}
               items={NAV_ITEMS}
-              onClick={({ key }) => navigate(key)}
+              onClick={({ key }) => {
+                const unsaved = unsavedChanges()
+                if (!unsaved || key === location.pathname) return navigate(key)
+                modal.confirm({
+                  title: 'Leave without saving?',
+                  content: `${unsaved}. They will be lost.`,
+                  okText: 'Leave',
+                  okButtonProps: { danger: true },
+                  cancelText: 'Stay',
+                  onOk: () => { setUnsavedChanges(null); navigate(key) },
+                })
+              }}
               style={{ marginTop: 8, borderRight: 0 }}
             />
           </div>

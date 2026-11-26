@@ -14,7 +14,7 @@ import { Button, Card, Checkbox, Form, Select, Space, Typography } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
 import { AttributeField, type Ctx } from './jobsFields'
 import {
-  attributeLabel, childIndex, childIndexes, elementLabel, fieldStatus, fileOptions, fileRefType, findPath, getNode, insertChild, parseFieldRef, setAttribute,
+  CHANGED_STYLE, hasChangesUnder, isChanged, attributeLabel, childIndex, childIndexes, elementLabel, fieldStatus, fileOptions, fileRefType, findPath, getNode, insertChild, parseFieldRef, setAttribute,
   specAt, updateNode,
   type ElementNode, type ElementSpec, type EssentialsGroup, type Path,
 } from './jobsTree'
@@ -26,14 +26,25 @@ const NO_FILE = '(no file)'
 interface Props {
   ctx: Ctx
   root: ElementNode
+  savedRoot: ElementNode | null  // tree as last saved, to mark changed lists
   jobIndex: number
   jobSpec: ElementSpec | undefined
   newNode: (schemaPath: string) => Promise<ElementNode>
   onEdit: (fn: (root: ElementNode) => ElementNode) => void
 }
 
-export default function JobEssentials({ ctx, root, jobIndex, jobSpec, newNode, onEdit }: Props) {
+export default function JobEssentials({ ctx, root, savedRoot, jobIndex, jobSpec, newNode, onEdit }: Props) {
   const groups = ctx.schema.hints.essentials ?? []
+
+  /** Values of `attribute` over the `tag` children of the element at `parent`, in a tree. */
+  const listValues = (tree: ElementNode, parent: string[], tag: string, attribute: string): string[] => {
+    const job = tree.children[jobIndex]
+    if (!job || !('tag' in job) || job.tag !== 'job') return []
+    const parentPath = findPath(tree, [jobIndex], parent)
+    if (!parentPath) return []
+    const node = getNode(tree, parentPath)
+    return childIndexes(node, tag).map(i => (node.children[i] as ElementNode).attrs[attribute] ?? '')
+  }
 
   /** Create the elements of `elements` that are missing; `newLast` always adds a new last one. */
   const addElement = async (elements: string[], newLast = false, attrs: Record<string, string> = {}) => {
@@ -93,12 +104,13 @@ export default function JobEssentials({ ctx, root, jobIndex, jobSpec, newNode, o
       const tag = elements[elements.length - 1]
       const parentPath = findPath(root, [jobIndex], parent)
       if (!parentPath) return null
-      const parentNode = getNode(root, parentPath)
-      const values = childIndexes(parentNode, tag).map(i => (parentNode.children[i] as ElementNode).attrs[attribute] ?? '')
+      const values = listValues(root, parent, tag, attribute)
       const ftype = fileRefType(ctx.schema.file_refs, tag, attribute)
       const options = ftype !== undefined ? fileOptions(ctx.files, ctx.jobsFile, ftype) : []
+      const changed = savedRoot !== null && values.join('\n') !== listValues(savedRoot, parent, tag, attribute).join('\n')
       return (
-        <Form.Item key={ref} label={elementLabel(ctx.schema, tag)} style={{ marginBottom: 8 }}>
+        <Form.Item key={ref} label={elementLabel(ctx.schema, tag)}
+          style={{ marginBottom: 8, ...(changed ? CHANGED_STYLE : {}) }}>
           <Select mode="tags" style={{ width: 480 }} value={values.map(v => v || NO_FILE)} options={options}
             placeholder="none"
             onChange={(next: string[]) => {
@@ -127,7 +139,8 @@ export default function JobEssentials({ ctx, root, jobIndex, jobSpec, newNode, o
     }
     const hint = ctx.schema.hints.attributes[`${spec.name}@${attribute}`] ?? {}
     return (
-      <Form.Item key={ref} label={label} extra={hint.help} style={{ marginBottom: 8 }}
+      <Form.Item key={ref} label={label} extra={hint.help}
+        style={{ marginBottom: 8, ...(isChanged(ctx.diff, path, attribute) ? CHANGED_STYLE : {}) }}
         {...fieldStatus(ctx.issues, path, attribute)}>
         <AttributeField ctx={ctx} node={getNode(root, path)} path={path} name={attribute}
           spec={spec.attributes.find(a => a.name === attribute)} />
@@ -154,7 +167,9 @@ export default function JobEssentials({ ctx, root, jobIndex, jobSpec, newNode, o
                   onChange={e => (e.target.checked
                     ? addElement([...elements, child.name])
                     : removeChildren(elements, child.name))}>
-                  {elementLabel(ctx.schema, child.name)}
+                  <span style={first && hasChangesUnder(ctx.diff, first) ? { color: '#1677ff', fontWeight: 500 } : undefined}>
+                    {elementLabel(ctx.schema, child.name)}
+                  </span>
                   {indexes.length > 1 && <Text type="secondary"> ({indexes.length})</Text>}
                 </Checkbox>
                 {node && first && child.attributes.filter(a => a.required).map(a => {

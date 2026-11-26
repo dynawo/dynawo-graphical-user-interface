@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from 'vitest'
 import {
-  addableChildren, canRemove, childIndexes, findPath, getNode, parseFieldRef, specAt, insertChild, issuesAt, jobIndexes, moveChild,
+  addableChildren, canRemove, childIndexes, diffTree, hasChangesUnder, isChanged, findPath, getNode, parseFieldRef, specAt, insertChild, issuesAt, jobIndexes, moveChild,
   parSetSource, referenceTo, removeChild, sessionPath, setAttribute, uniqueName,
   type ElementNode, type ElementSpec,
 } from './jobsTree'
@@ -131,5 +131,38 @@ describe('field references', () => {
     const job = spec('job', 1, null, [modelerSpec])
     expect(specAt(job, ['modeler', 'network'])?.name).toBe('network')
     expect(specAt(job, ['modeler', 'nothing'])).toBeUndefined()
+  })
+})
+
+describe('diffTree', () => {
+  const saved = () => el('job', [el('solver', [], { lib: 'IDA' }), modeler()])
+
+  it('finds nothing in an unchanged tree', () => {
+    expect(diffTree(saved(), saved()).count).toBe(0)
+  })
+
+  it('marks a changed attribute', () => {
+    const edited = setAttribute(saved(), [0], 'lib', 'SIM')
+    const diff = diffTree(saved(), edited)
+    expect(diff.count).toBe(1)
+    expect(isChanged(diff, [0], 'lib')).toBe(true)
+    expect(hasChangesUnder(diff, [0])).toBe(true)
+    expect(hasChangesUnder(diff, [1])).toBe(false)
+  })
+
+  it('counts a removed attribute', () => {
+    expect(diffTree(saved(), setAttribute(saved(), [0], 'lib', undefined)).count).toBe(1)
+  })
+
+  it('marks an added element without marking its siblings', () => {
+    const { root } = insertChild(saved(), [1], modelerSpec, el('network'))
+    const diff = diffTree(saved(), root)
+    expect(diff.count).toBe(1)
+    expect(isChanged(diff, [1, 0])).toBe(true)
+    expect(diff.changedAttrs.size).toBe(0)
+  })
+
+  it('counts a removed element and its content', () => {
+    expect(diffTree(saved(), removeChild(saved(), [], 1)).count).toBe(5)  // modeler + 4 children
   })
 })
