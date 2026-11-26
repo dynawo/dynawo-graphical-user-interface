@@ -1,4 +1,10 @@
 {
+  "essentials": [
+    { "title": "Time window", "fields": ["simulation@startTime", "simulation@stopTime"] },
+    { "title": "Solver", "fields": ["solver@lib", "solver@parFile", "solver@parId"] },
+    { "title": "Network and models", "fields": ["modeler/network@iidmFile", "modeler/network@parFile", "modeler/network@parId", "modeler/dynModels@dydFile[]"] },
+    { "title": "Outputs", "fields": ["outputs@directory", "outputs/logs/appender@lvlFilter"], "toggles": "outputs", "exclude": ["logs"] }
+  ],
   "elements": {
     "job": { "label": "Job" },
     "solver": { "label": "Solver" },
@@ -77,7 +83,7 @@
     "linearization@exportMode": { "label": "Export mode" },
     "appender@file": { "label": "File", "default": "dynawo.log" },
     "appender@tag": { "label": "Tag", "default": "" },
-    "appender@lvlFilter": { "label": "Level", "default": "INFO" },
+    "appender@lvlFilter": { "label": "Log level", "default": "INFO" },
     "appender@showLevelTag": { "label": "Show level" },
     "appender@timeStampFormat": { "label": "Time stamp format" },
     "appender@separator": { "label": "Separator" },

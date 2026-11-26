@@ -32,7 +32,11 @@ export interface ElementSpec {
 
 export interface ElementHint { label?: string; help?: string; create?: boolean }
 export interface AttributeHint { label?: string; help?: string; unit?: string; default?: string; values?: string[] }
-export interface Hints { elements: Record<string, ElementHint>; attributes: Record<string, AttributeHint> }
+export interface Hints {
+  essentials?: EssentialsGroup[]
+  elements: Record<string, ElementHint>
+  attributes: Record<string, AttributeHint>
+}
 
 export interface FileRef { element: string; attribute: string; ftype: string | null }
 
@@ -227,4 +231,69 @@ export function jobNames(root: ElementNode): string[] {
 /** Indexes of the <job> children of the root. */
 export function jobIndexes(root: ElementNode): number[] {
   return root.children.flatMap((c, i) => (isDynElement(c) && c.tag === 'job' ? [i] : []))
+}
+
+export interface EssentialsGroup { title: string; fields: string[]; toggles?: string; exclude?: string[] }
+
+/** A field reference such as "modeler/dynModels@dydFile[]": element names under <job>, attribute, list flag. */
+export interface FieldRef { elements: string[]; attribute: string; list: boolean }
+
+export function parseFieldRef(ref: string): FieldRef {
+  const list = ref.endsWith('[]')
+  const [path, attribute] = (list ? ref.slice(0, -2) : ref).split('@')
+  return { elements: path.split('/').filter(Boolean), attribute, list }
+}
+
+/** Spec of the element reached from `spec` through `elements`, or undefined. */
+export function specAt(spec: ElementSpec | undefined, elements: string[]): ElementSpec | undefined {
+  let current = spec
+  for (const name of elements) current = current?.children.find(c => c.name === name)
+  return current
+}
+
+/** Index of the first `tag` element child, or -1. */
+export function childIndex(node: ElementNode, tag: string): number {
+  return node.children.findIndex(c => isDynElement(c) && c.tag === tag)
+}
+
+/** Path of the first element reached through `elements` from `path`, or null if one is missing. */
+export function findPath(root: ElementNode, path: Path, elements: string[]): Path | null {
+  let current = path
+  for (const name of elements) {
+    const index = childIndex(getNode(root, current), name)
+    if (index === -1) return null
+    current = [...current, index]
+  }
+  return current
+}
+
+/** Indexes of all `tag` element children. */
+export function childIndexes(node: ElementNode, tag: string): number[] {
+  return node.children.flatMap((c, i) => (isDynElement(c) && c.tag === tag ? [i] : []))
+}
+
+export interface SessionFile { name: string; ftype: string | null }
+
+export function elementLabel(schema: Schema, tag: string): string {
+  return schema.hints.elements[tag]?.label ?? tag
+}
+
+export function attributeLabel(schema: Schema, tag: string, name: string): string {
+  return schema.hints.attributes[`${tag}@${name}`]?.label ?? name
+}
+
+/** Form.Item status and message of the issues on one attribute. */
+export function fieldStatus(issues: Issue[], path: Path, name: string) {
+  const own = issuesAt(issues, path).filter(i => i.attribute === name)
+  return {
+    validateStatus: own.some(i => i.level === 'error') ? 'error' as const : own.length ? 'warning' as const : undefined,
+    help: own.length ? own.map(i => i.message).join(' · ') : undefined,
+  }
+}
+
+/** Session files offered for a file attribute, as references relative to the jobs file. */
+export function fileOptions(files: SessionFile[], jobsFile: string, ftype: string | null) {
+  return files
+    .filter(f => ftype === null || f.ftype === ftype)
+    .map(f => ({ value: referenceTo(jobsFile, f.name), label: f.name }))
 }

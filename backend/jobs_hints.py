@@ -25,10 +25,14 @@ HINTS_PATH = os.path.join(os.path.dirname(__file__), "..", "resources", "jobs_ed
 
 @functools.lru_cache(maxsize=1)
 def load_hints() -> dict:
-    """{"elements": {name: hint}, "attributes": {"element@attribute": hint}}."""
+    """{"essentials": [group], "elements": {name: hint}, "attributes": {"element@attribute": hint}}."""
     with open(HINTS_PATH, encoding="utf-8") as fh:
         hints = json.load(fh)
-    return {"elements": hints.get("elements", {}), "attributes": hints.get("attributes", {})}
+    return {
+        "essentials": hints.get("essentials", []),
+        "elements": hints.get("elements", {}),
+        "attributes": hints.get("attributes", {}),
+    }
 
 
 def new_element(spec: ElementSpec, hints: dict | None = None) -> dict:

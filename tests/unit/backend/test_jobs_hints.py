@@ -78,3 +78,17 @@ def test_the_app_hints_file_is_well_formed():
         assert set(hint) <= {"label", "help", "unit", "default", "values"}, key
     for name, hint in hints["elements"].items():
         assert set(hint) <= {"label", "help", "create"}, name
+    for group in hints["essentials"]:
+        assert set(group) <= {"title", "fields", "toggles", "exclude"}, group
+        for field in group["fields"]:
+            path, _, attribute = field.removesuffix("[]").partition("@")
+            assert path and attribute and "@" not in attribute, field
+
+
+def test_essential_fields_name_attributes_of_their_element(schema):
+    for group in load_hints()["essentials"]:
+        for field in group["fields"]:
+            path, _, attribute = field.removesuffix("[]").partition("@")
+            spec = schema.find(f"jobs/job/{path}")
+            if spec is not None:
+                assert spec.attribute(attribute) is not None, field
