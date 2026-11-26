@@ -77,6 +77,24 @@ def test_schema(client, dynawo):
     assert {"element": "dynModels", "attribute": "dydFile", "ftype": "dyd"} in body["file_refs"]
 
 
+def test_schema_includes_the_hints(client, dynawo):
+    hints = client.get("/api/jobs/schema").json()["hints"]
+    assert hints["attributes"]["solver@lib"]["default"] == "dynawo_SolverIDA"
+
+
+def test_new_element(client, dynawo):
+    node = client.get("/api/jobs/new", params={"path": "jobs/job/outputs/timeline"}).json()["node"]
+    assert node["tag"] == "timeline"
+    assert client.get("/api/jobs/new", params={"path": "jobs/nothing"}).status_code == 404
+
+
+def test_a_new_jobs_file_can_be_created_from_a_new_root(client, dynawo):
+    root = client.get("/api/jobs/new", params={"path": "jobs"}).json()["node"]
+    response = client.post("/api/jobs/file", json={"jobs_file": "new.jobs", "document": {"root": root}})
+    assert response.status_code == 200, response.text
+    assert _get(client, "new.jobs")["document"]["root"]["children"][0]["attrs"]["name"] == "job"
+
+
 def test_get_a_jobs_file(client, case):
     body = _get(client)
     assert body["document"]["root"]["tag"] == "jobs"
