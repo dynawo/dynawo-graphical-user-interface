@@ -103,6 +103,15 @@ class SessionManager:
         self._raw[name] = data
         return info
 
+    def refresh_info(self, name: str) -> FileInfo:
+        """Update a file's size and type from disk, keeping its original bytes."""
+        path = self._resolve(name)
+        with open(path, "rb") as fh:
+            data = fh.read()
+        info = FileInfo(name=name, size=len(data), ftype=detect_dynawo_type(data, name))
+        self._files[name] = info
+        return info
+
     def has_file(self, name: str) -> bool:
         return name in self._files
 
