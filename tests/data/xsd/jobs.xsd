@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A reduced jobs.xsd using every XSD construct backend/jobs_schema.py reads. -->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           xmlns:dyn="http://www.rte-france.com/dynawo"
+           targetNamespace="http://www.rte-france.com/dynawo"
+           elementFormDefault="qualified">
+  <xs:element name="jobs">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="job" type="dyn:Job" maxOccurs="unbounded"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <xs:complexType name="Job">
+    <xs:all minOccurs="0">
+      <xs:element name="solver" type="dyn:Solver"/>
+      <xs:element name="modeler" type="dyn:Modeler">
+        <xs:unique name="UniqueDyd">
+          <xs:selector xpath="dyn:dynModels"/>
+          <xs:field xpath="@dydFile"/>
+        </xs:unique>
+      </xs:element>
+      <xs:element name="simulation" type="dyn:Simulation"/>
+      <xs:element name="outputs" type="dyn:Outputs" minOccurs="0"/>
+    </xs:all>
+    <xs:attribute name="name" use="required" type="xs:string"/>
+  </xs:complexType>
+
+  <xs:complexType name="Solver">
+    <xs:attribute name="lib" use="required" type="xs:string"/>
+    <xs:attribute name="parFile" use="required" type="xs:string"/>
+    <xs:attribute name="parId" use="required" type="xs:string"/>
+  </xs:complexType>
+
+  <xs:complexType name="Modeler">
+    <xs:sequence>
+      <xs:element name="network" type="dyn:Network" minOccurs="0"/>
+      <xs:element name="dynModels" type="dyn:DynModels" maxOccurs="unbounded"/>
+      <xs:element name="precompiledModels" type="dyn:Models"/>
+      <xs:element name="modelicaModels" type="dyn:Models"/>
+    </xs:sequence>
+    <xs:attribute name="compileDir" use="required" type="xs:string"/>
+  </xs:complexType>
+
+  <xs:complexType name="Network">
+    <xs:attribute name="iidmFile" use="required" type="xs:string"/>
+    <xs:attribute name="parFile" use="optional" type="xs:string"/>
+    <xs:attribute name="parId" use="optional" type="xs:string"/>
+  </xs:complexType>
+
+  <xs:complexType name="DynModels">
+    <xs:attribute name="dydFile" use="required" type="xs:string"/>
+  </xs:complexType>
+
+  <xs:complexType name="Models">
+    <xs:sequence>
+      <xs:element name="directory" type="dyn:Directory" minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+    <xs:attribute name="useStandardModels" use="required" type="xs:boolean"/>
+  </xs:complexType>
+
+  <xs:complexType name="Directory">
+    <xs:attribute name="path" use="required" type="xs:string"/>
+    <xs:attribute name="recursive" use="required" type="xs:boolean"/>
+  </xs:complexType>
+
+  <xs:complexType name="Simulation">
+    <xs:attribute name="startTime" use="required" type="xs:float"/>
+    <xs:attribute name="stopTime" use="required" type="xs:float"/>
+    <xs:attribute name="criteriaStep" type="xs:int"/>
+  </xs:complexType>
+
+  <xs:complexType name="Outputs">
+    <xs:sequence>
+      <xs:element name="timeline" type="dyn:Timeline" minOccurs="0"/>
+      <xs:element name="finalState" type="dyn:FinalState" minOccurs="0" maxOccurs="unbounded"/>
+      <xs:element name="curves" type="dyn:Curves" minOccurs="0"/>
+      <xs:element name="lostEquipments" type="dyn:LostEquipments" minOccurs="0"/>
+    </xs:sequence>
+    <xs:attribute name="directory" use="required" type="xs:string"/>
+  </xs:complexType>
+
+  <xs:complexType name="Timeline">
+    <xs:attribute name="exportMode" use="required" type="dyn:TimelineExportMode"/>
+    <xs:attribute name="exportTime" use="optional" type="xs:boolean"/>
+  </xs:complexType>
+
+  <xs:simpleType name="TimelineExportMode">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="TXT"/>
+      <xs:enumeration value="CSV"/>
+      <xs:enumeration value="XML"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:complexType name="FinalState">
+    <xs:attribute name="exportIIDMFile" use="required" type="xs:boolean"/>
+    <xs:attribute name="timestamp" type="xs:float"/>
+  </xs:complexType>
+
+  <xs:complexType name="Curves">
+    <xs:attribute name="inputFile" use="required" type="xs:string"/>
+    <xs:attribute name="exportMode" use="optional" type="dyn:CurvesExportMode" default="CSV"/>
+  </xs:complexType>
+
+  <xs:simpleType name="CurvesExportMode">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="XML"/>
+      <xs:enumeration value="CSV"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:complexType name="LostEquipments"/>
+</xs:schema>
