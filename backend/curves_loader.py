@@ -69,9 +69,41 @@ def load_curves_hdf5(output_dir: str) -> pd.DataFrame | None:
     return df
 
 
+def load_curves_xml(output_dir: str) -> pd.DataFrame | None:
+    """Load curves/curves.xml (curve elements of points) as the same table as the CSV."""
+    path = os.path.join(output_dir, "curves", "curves.xml")
+    if not os.path.isfile(path):
+        return None
+    curves: list[tuple[str, list[float], list[float]]] = []
+    try:
+        for _, el in ET.iterparse(path, events=("end",)):
+            if el.tag != f"{{{_NS}}}curve":
+                continue
+            points = el.findall(f"{{{_NS}}}point")
+            curves.append((
+                f"{el.get('model', '')}_{el.get('variable', '')}",
+                [float(p.get("time", "nan")) for p in points],
+                [float(p.get("value", "nan")) for p in points],
+            ))
+            el.clear()
+    except (ET.ParseError, ValueError):
+        return None
+    if not curves:
+        return None
+    time = curves[0][1]
+    if all(t == time for _, t, _ in curves):
+        df = pd.DataFrame({name: values for name, _, values in curves})
+        df.insert(0, "time", time)
+        return df
+    # Different time grids: joined on time, gaps left empty.
+    series = [pd.Series(v, index=t, name=name).groupby(level=0).last() for name, t, v in curves]
+    df = pd.concat(series, axis=1).sort_index()
+    return df.rename_axis("time").reset_index()
+
+
 def load_curves(output_dir: str) -> pd.DataFrame | None:
     """Curves of an output directory, from whichever format Dynawo exported, or None."""
-    for loader in (load_curves_csv, load_curves_hdf5):
+    for loader in (load_curves_csv, load_curves_hdf5, load_curves_xml):
         df = loader(output_dir)
         if df is not None:
             return df

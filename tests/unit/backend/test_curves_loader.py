@@ -13,6 +13,7 @@ from backend.curves_loader import (
     load_curves,
     load_curves_csv,
     load_curves_hdf5,
+    load_curves_xml,
     read_crv_info,
 )
 
@@ -113,3 +114,50 @@ def test_load_curves_reads_csv_or_hdf5(tmp_path, data_dir):
     _write_h5(tmp_path, [0.0], ["A_x"], [[1.0]])
     assert list(load_curves(str(tmp_path)).columns) == ["time", "A_x"]
     assert list(load_curves(str(data_dir / "outputs")).columns)[0] == "time"
+
+
+def _write_xml(output_dir, curves: str) -> None:
+    """A curves.xml laid out as Dynawo writes it: curve elements holding their points."""
+    (output_dir / "curves").mkdir(parents=True, exist_ok=True)
+    (output_dir / "curves" / "curves.xml").write_text(
+        '<?xml version="1.0" encoding="ISO-8859-1" standalone="no"?>\n'
+        f'<curvesOutput xmlns="http://www.rte-france.com/dynawo">{curves}</curvesOutput>',
+        encoding="iso-8859-1")
+
+
+def test_curves_xml_gives_the_same_table_as_the_csv(tmp_path):
+    _write_xml(tmp_path,
+               '<curve model="NETWORK" variable="BUS1_Upu_value">'
+               '<point time="0.0" value="1.02"/><point time="1.0" value="0.98"/></curve>'
+               '<curve model="GEN1" variable="generator_omegaPu">'
+               '<point time="0.0" value="1.0"/><point time="1.0" value="0.999"/></curve>')
+    time, signals = curves_time_and_signals(load_curves_xml(str(tmp_path)))
+    assert list(time) == [0.0, 1.0]
+    assert signals == ["NETWORK_BUS1_Upu_value", "GEN1_generator_omegaPu"]
+
+
+def test_curves_xml_keeps_repeated_times(tmp_path):
+    # Dynawo writes several points at the time of an event.
+    _write_xml(tmp_path, '<curve model="A" variable="x"><point time="0" value="1"/>'
+                         '<point time="1" value="2"/><point time="1" value="3"/></curve>')
+    df = load_curves_xml(str(tmp_path))
+    assert list(df["time"]) == [0.0, 1.0, 1.0]
+    assert list(df["A_x"]) == [1.0, 2.0, 3.0]
+
+
+def test_curves_xml_on_different_time_grids_are_joined_on_time(tmp_path):
+    _write_xml(tmp_path, '<curve model="A" variable="x"><point time="0" value="1"/><point time="2" value="3"/></curve>'
+                         '<curve model="B" variable="y"><point time="1" value="5"/></curve>')
+    df = load_curves_xml(str(tmp_path))
+    assert list(df["time"]) == [0.0, 1.0, 2.0]
+    assert df["B_y"].isna().tolist() == [True, False, True]
+
+
+def test_curves_xml_that_does_not_parse_is_not_read(tmp_path):
+    _write_xml(tmp_path, '<curve model="A" variable="x"><point time="0" value="1"/>')
+    assert load_curves_xml(str(tmp_path)) is None
+
+
+def test_load_curves_reads_xml_too(tmp_path):
+    _write_xml(tmp_path, '<curve model="A" variable="x"><point time="0" value="1"/></curve>')
+    assert list(load_curves(str(tmp_path)).columns) == ["time", "A_x"]
