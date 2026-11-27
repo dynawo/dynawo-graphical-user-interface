@@ -17,6 +17,7 @@ import {
 import { RedoOutlined, RollbackOutlined, SaveOutlined } from '@ant-design/icons'
 import client from '../api/client'
 import { valuesEqual } from './parValues'
+import BackLink from './BackLink'
 
 const { Title, Text } = Typography
 
@@ -136,6 +137,7 @@ export default function EditSolverParameters() {
 
   return (
     <div style={{ maxWidth: 900 }}>
+      <BackLink />
       <Title level={3}>Edit Solver Parameters</Title>
 
       {notFound && (

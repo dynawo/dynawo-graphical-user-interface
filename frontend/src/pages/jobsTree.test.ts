@@ -11,7 +11,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   addableChildren, canRemove, childIndexes, diffTree, hasChangesUnder, isChanged, findPath, getNode, parseFieldRef, specAt, insertChild, issuesAt, jobIndexes, moveChild,
-  parSetSource, referenceTo, removeChild, sessionPath, setAttribute, uniqueName,
+  parameterPage, parSetSource, referenceTo, removeChild, sessionPath, setAttribute, uniqueName,
   type ElementNode, type ElementSpec,
 } from './jobsTree'
 
@@ -164,5 +164,14 @@ describe('diffTree', () => {
 
   it('counts a removed element and its content', () => {
     expect(diffTree(saved(), removeChild(saved(), [], 1)).count).toBe(5)  // modeler + 4 children
+  })
+})
+
+describe('parameterPage', () => {
+  it('opens the solver and network sets of the jobs file', () => {
+    expect(parameterPage('solver', 'a b.jobs')?.to).toBe('/edit-solver-parameters?jobs=a%20b.jobs')
+    expect(parameterPage('network', 'x.jobs')?.to).toBe('/edit-parameters?model=NETWORK%20%5Bx.jobs%5D')
+    expect(parameterPage('network', 'x.jobs')?.back).toBe('/simulation-settings?jobs=x.jobs')
+    expect(parameterPage('localInit', 'x.jobs')).toBeUndefined()
   })
 })

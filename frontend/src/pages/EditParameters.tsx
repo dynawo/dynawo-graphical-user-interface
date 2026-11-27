@@ -9,6 +9,7 @@
 //
 
 import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   Alert, AutoComplete, Button, Card, Checkbox, Collapse, Input, Popover, Select,
   Space, Table, Tag, Tooltip, Typography,
@@ -17,6 +18,7 @@ import { LinkOutlined, RedoOutlined, RollbackOutlined, SaveOutlined } from '@ant
 import client from '../api/client'
 import { errorDetail } from '../api/errors'
 import { valuesEqual } from './parValues'
+import BackLink from './BackLink'
 
 const { Title, Text } = Typography
 
@@ -87,6 +89,8 @@ function ReferenceButton({ par, suggestion, origNames, onUse }: {
 }
 
 export default function EditParameters() {
+  // The model shown first: from the link (?model=), else the first one.
+  const [searchParams] = useSearchParams()
   const [models, setModels] = useState<ModelEntry[]>([])
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null)
   const [detail, setDetail] = useState<ModelDetail | null>(null)
@@ -101,7 +105,10 @@ export default function EditParameters() {
     try {
       const res = await client.get<ModelEntry[]>('/parameters/models')
       setModels(res.data)
-      if (res.data.length && !selectedModelId) setSelectedModelId(res.data[0].dyn_id)
+      const wanted = searchParams.get('model')
+      if (res.data.length && !selectedModelId) {
+        setSelectedModelId(res.data.some(m => m.dyn_id === wanted) ? wanted : res.data[0].dyn_id)
+      }
     } catch {
       setModels([])
     }
@@ -222,6 +229,7 @@ export default function EditParameters() {
 
   return (
     <div style={{ maxWidth: 900 }}>
+      <BackLink />
       <Title level={3}>Edit Parameters</Title>
 
       {models.length === 0 && (

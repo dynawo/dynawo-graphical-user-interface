@@ -354,3 +354,19 @@ export function hasChangesUnder(diff: TreeDiff | null, path: Path): boolean {
 
 /** Style of a form item changed since the last save. */
 export const CHANGED_STYLE = { borderLeft: '3px solid #1677ff', paddingLeft: 8, marginLeft: -11 }
+
+/** Page editing a set the jobs file points to; `back` is the address returning here. */
+export interface ParameterPage { title: string; to: string; back: string }
+
+/** The page editing the parameter set of `tag` (solver or network), if one does. */
+export function parameterPage(tag: string, jobsFile: string): ParameterPage | undefined {
+  const back = `/simulation-settings?jobs=${encodeURIComponent(jobsFile)}`
+  if (tag === 'solver') {
+    return { title: 'Edit Solver Parameters', to: `/edit-solver-parameters?jobs=${encodeURIComponent(jobsFile)}`, back }
+  }
+  if (tag === 'network') {
+    // Edit Parameters lists the network set of a jobs file under this id.
+    return { title: 'Edit Parameters', to: `/edit-parameters?model=${encodeURIComponent(`NETWORK [${jobsFile}]`)}`, back }
+  }
+  return undefined
+}
