@@ -164,6 +164,7 @@ def get_model_params(model_id: str, session: UserSession = Depends(get_session))
     return {
         **info, "pars": par_set["pars"], "refs": par_set["refs"],
         "siblings": siblings, "macro_id": macro_id, "macro_siblings": macro_siblings,
+        "same_lib": _same_lib_models(models, model_id),
         "reference_suggestions": _reference_suggestions(par_set["pars"], used),
         "orig_names": sorted({o for counts in used.values() for o in counts} | set(_CONVENTIONAL_REFERENCES.values())),
     }
@@ -171,6 +172,82 @@ def get_model_params(model_id: str, session: UserSession = Depends(get_session))
 
 class ApplyRequest(BaseModel):
     values: dict[str, str]
+    # Also give the changed parameters to every other model of the same lib.
+    propagate: bool = False
+
+
+def _same_lib_models(models: dict[str, dict], model_id: str) -> list[str]:
+    """dyn_ids of the other models of the same type (lib) as model_id."""
+    info = models[model_id]
+    return sorted(
+        mid for mid, m in models.items()
+        if mid != model_id and m["lib"] == info["lib"] and m["kind"] == info["kind"]
+    )
+
+
+def _write_set(
+    session: UserSession, dyn_id: str, par_file: str, set_id: str,
+    values: dict[str, str], types: dict[str, str],
+) -> int:
+    """Write values into a set and log what actually changed. Old values are
+    read just before writing, so a value already given through a macro shared
+    with a set written earlier is not counted twice."""
+    par_set = _get_par_set(session, par_file, set_id)
+    old_vals = {p["name"]: p["value"] for p in par_set["pars"]}
+    diffs = [
+        ParameterChange(name=k, old_value=old_vals.get(k, ""), new_value=v)
+        for k, v in values.items()
+        if old_vals.get(k, "") != v
+    ]
+    write_par_values(session.session_manager.get_path(par_file), set_id, values, types)
+    if diffs:
+        session.par_change_log.append(ChangeLogEntry(
+            timestamp=datetime.now().isoformat(timespec="seconds"),
+            dyn_id=dyn_id, par_file=par_file, set_id=set_id, changes=diffs,
+        ))
+    return len(diffs)
+
+
+def _propagate(
+    session: UserSession, models: dict[str, dict], model_id: str,
+    values: dict[str, str], types: dict[str, str],
+) -> tuple[list[str], list[dict]]:
+    """Give `values` to the other models of model_id's lib. Returns the dyn_ids
+    whose parameters changed and the {dyn_id, reason} of those left out.
+
+    A parameter the target set reads from the network (IIDM reference) is left
+    as is; one the target set lacks is added, as the model needs it too."""
+    info = models[model_id]
+    targets: dict[tuple[str, str], list[str]] = {}
+    skipped: list[dict] = []
+    for mid in _same_lib_models(models, model_id):
+        m = models[mid]
+        if (m["parFile"], m["parId"]) == (info["parFile"], info["parId"]):
+            continue  # same <set>: already written
+        if not m["parFile"] or not m["parId"]:
+            skipped.append({"dyn_id": mid, "reason": "no parameter set"})
+            continue
+        targets.setdefault((m["parFile"], m["parId"]), []).append(mid)
+
+    propagated: list[str] = []
+    for (par_file, set_id), dyn_ids in targets.items():
+        par_path = session.session_manager.get_path(par_file)
+        if not os.path.isfile(par_path):
+            skipped += [{"dyn_id": d, "reason": f"par file {par_file} not found"} for d in dyn_ids]
+            continue
+        with open(par_path, "rb") as fh:
+            sets = parse_par(fh.read())
+        if set_id not in sets:
+            skipped += [{"dyn_id": d, "reason": f"set {set_id} not found in {par_file}"} for d in dyn_ids]
+            continue
+        ref_names = {r["name"] for r in sets[set_id]["refs"]}
+        for name in sorted(ref_names & set(values)):
+            skipped += [{"dyn_id": d, "reason": f"{name} is read from the network"} for d in dyn_ids]
+        set_types = {**types, **{p["name"]: p["type"] for p in sets[set_id]["pars"]}}
+        to_write = {k: v for k, v in values.items() if k not in ref_names}
+        if to_write and _write_set(session, dyn_ids[0], par_file, set_id, to_write, set_types):
+            propagated += dyn_ids
+    return sorted(propagated), skipped
 
 
 @router.put("/model/{model_id}")
@@ -186,21 +263,15 @@ def apply_model_params(model_id: str, req: ApplyRequest, session: UserSession = 
     par_set = _get_par_set(session, info["parFile"], info["parId"])
     old_vals = {p["name"]: p["value"] for p in par_set.get("pars", [])}
     types = {p["name"]: p["type"] for p in par_set.get("pars", [])}
-    diffs = [
-        ParameterChange(name=k, old_value=old_vals.get(k, ""), new_value=v)
-        for k, v in req.values.items()
-        if old_vals.get(k, "") != v
-    ]
-    write_par_values(par_path, info["parId"], req.values, types)
-    if diffs:
-        session.par_change_log.append(ChangeLogEntry(
-            timestamp=datetime.now().isoformat(timespec="seconds"),
-            dyn_id=info["dyn_id"],
-            par_file=info["parFile"],
-            set_id=info["parId"],
-            changes=diffs,
-        ))
-    return {"changed": len(diffs)}
+    # Only what the user changed travels to the other models, not the whole form.
+    changed_vals = {k: v for k, v in req.values.items() if old_vals.get(k, "") != v}
+    changed = _write_set(session, info["dyn_id"], info["parFile"], info["parId"], req.values, types)
+
+    propagated: list[str] = []
+    skipped: list[dict] = []
+    if req.propagate and changed_vals:
+        propagated, skipped = _propagate(session, models, model_id, changed_vals, types)
+    return {"changed": changed, "propagated": propagated, "skipped": skipped}
 
 
 class ReferencesRequest(BaseModel):

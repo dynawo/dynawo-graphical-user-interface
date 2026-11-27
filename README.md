@@ -228,7 +228,7 @@ LaTeX log is in `docs/user_guide.log`.
 4. Go to **Upload Files** → drag and drop your `.jobs`, `.dyd`, `.par`, `.iidm`, `.crv` files
 5. Load the `.iidm` network to see the component count summary
 6. Go to **Network View** → explore the network diagram and voltage levels
-7. Go to **Edit Parameters** → select a dynamic model and edit its parameters; use **Revert** on individual change-log entries to undo a specific edit, or **Restore original** to go back to the uploaded file
+7. Go to **Edit Parameters** → select a dynamic model and edit its parameters (tick **Apply to all** to give the change to every model of the same type); use **Revert** on individual change-log entries to undo a specific edit, or **Restore original** to go back to the uploaded file
 8. Go to **Edit Solver Parameters** → adjust solver settings the same way
 9. Go to **Run Simulation** → run and inspect output curves; use **Download Files** in the sidebar to export all input files and results as a ZIP
 
