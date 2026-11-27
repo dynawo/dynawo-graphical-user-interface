@@ -10,10 +10,11 @@
 
 // Attribute field of the Simulation Settings page, and what the form components share.
 
-import { AutoComplete, Input, Segmented, Select, Switch, Typography } from 'antd'
+import { AutoComplete, Button, Input, Segmented, Select, Space, Switch, Tooltip, Typography } from 'antd'
+import { EditOutlined } from '@ant-design/icons'
 import {
-  fileOptions, fileRefType, parSetSource, sessionPath,
-  type AttributeSpec, type ElementNode, type ElementSpec, type Issue, type Path, type Schema, type SessionFile,
+  fileOptions, fileRefType, parameterPage, parSetSource, sessionPath,
+  type AttributeSpec, type ParameterPage, type ElementNode, type ElementSpec, type Issue, type Path, type Schema, type SessionFile,
   type TreeDiff,
 } from './jobsTree'
 
@@ -32,6 +33,8 @@ export interface Ctx {
   onAdd: (path: Path, schemaPath: string, spec: ElementSpec | undefined, child: ElementSpec) => void
   onRemove: (path: Path, index: number) => void
   onMove: (path: Path, index: number, delta: -1 | 1) => void
+  firstJob: number | null  // index of the job the parameter pages read
+  openPage: (page: ParameterPage) => void
 }
 
 // Enumerations up to this size are shown as a row of buttons.
@@ -53,8 +56,21 @@ export function AttributeField({ ctx, node, path, name, spec, width = 360 }: {
   }
   if (parFileAttr && node.attrs[parFileAttr]) {
     const parFile = sessionPath(ctx.jobsFile, node.attrs[parFileAttr])
-    return <AutoComplete style={style} value={value} onChange={set}
+    const field = <AutoComplete style={style} value={value} onChange={set}
       onFocus={() => ctx.loadParSets(parFile)} options={(ctx.parSets[parFile] ?? []).map(s => ({ value: s }))} />
+    const page = parameterPage(node.tag, ctx.jobsFile)
+    if (!page) return field
+    const blocked = path[0] !== ctx.firstJob ? `${page.title} only edits the set of the first job`
+      : !value ? 'Choose a set first' : undefined
+    return (
+      <Space.Compact>
+        {field}
+        <Tooltip title={blocked ?? `Edit this set in ${page.title}`}>
+          <Button icon={<EditOutlined />} disabled={!!blocked} onClick={() => ctx.openPage(page)}
+            aria-label={`Edit this set in ${page.title}`} />
+        </Tooltip>
+      </Space.Compact>
+    )
   }
   if (spec?.type === 'boolean') {
     return <Switch checked={value === 'true' || value === '1'} onChange={on => set(on ? 'true' : 'false')} />

@@ -25,7 +25,7 @@ import { errorDetail, errorStatus } from '../api/errors'
 import {
   CHANGED_STYLE, addableChildren, canRemove, childSpec, diffTree, elementLabel, getNode, hasChangesUnder, isChanged, insertChild, isDynElement, isElement,
   issuesAt, jobIndexes, jobNames, moveChild, removeChild, setAttribute, uniqueName,
-  type ElementNode, type ElementSpec, type Issue, type JobsDocument, type Path,
+  type ElementNode, type ElementSpec, type Issue, type JobsDocument, type ParameterPage, type Path,
   type Schema, type SessionFile, type TreeNode,
 } from './jobsTree'
 import { AttributeField, type Ctx } from './jobsFields'
@@ -361,7 +361,7 @@ export default function SimulationSettings() {
 
   // ── Saving ─────────────────────────────────────────────────────────────────
 
-  const doSave = async (document: JobsDocument) => {
+  const doSave = async (document: JobsDocument, then?: () => void) => {
     if (!jobsFile || !token) return
     setSaving(true); setError(null); setSuccess(null); setConflict(null)
     try {
@@ -378,6 +378,7 @@ export default function SimulationSettings() {
         setXmlText(rendered.data.text)
       }
       setSuccess(`${jobsFile} saved.`)
+      then?.()
     } catch (err) {
       if (errorStatus(err) === 409) setConflict(errorDetail(err, 'The file was changed since it was read'))
       else setError(errorDetail(err, 'Save failed'))
@@ -386,19 +387,31 @@ export default function SimulationSettings() {
     }
   }
 
-  const handleSave = async () => {
+  const handleSave = async (then?: () => void) => {
     const document = tab === 'xml' ? await applyXml() : doc
     if (!document) return
     // Issues of the document as it will be saved.
     const res = await client.post<{ issues: Issue[] }>('/jobs/check', { document, jobs_file: jobsFile })
     setIssues(res.data.issues)
     const errors = res.data.issues.filter(i => i.level === 'error').length
-    if (!errors) return doSave(document)
+    if (!errors) return doSave(document, then)
     modal.confirm({
       title: `${errors} error${errors > 1 ? 's' : ''} against the Dynawo schema`,
       content: 'Dynawo will most likely refuse this file. Save anyway?',
       okText: 'Save anyway',
-      onOk: () => doSave(document),
+      onOk: () => doSave(document, then),
+    })
+  }
+
+  // The parameter pages read the saved file: save first.
+  const openPage = (page: ParameterPage) => {
+    const go = () => navigate(page.to, { state: { back: page.back } })
+    if (!dirty) return go()
+    modal.confirm({
+      title: `Save before opening ${page.title}?`,
+      content: `${page.title} reads the saved ${jobsFile}.`,
+      okText: 'Save and open',
+      onOk: () => handleSave(go),
     })
   }
 
@@ -492,6 +505,8 @@ export default function SimulationSettings() {
     },
     onRemove: (path, index) => edit(root => removeChild(root, path, index)),
     onMove: (path, index, delta) => edit(root => moveChild(root, path, index, delta)),
+    firstJob: doc ? jobIndexes(doc.root)[0] ?? null : null,
+    openPage,
   } : null
 
   const goToIssue = (issue: Issue) => {
@@ -666,7 +681,7 @@ export default function SimulationSettings() {
           </Text>
           <div style={{ flex: 1 }} />
           <Button icon={<RollbackOutlined />} onClick={() => jobsFile && loadFile(jobsFile)}>Discard</Button>
-          <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={handleSave}>
+          <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={() => handleSave()}>
             Save <Text keyboard style={{ color: 'inherit', fontSize: 11 }}>Ctrl+S</Text>
           </Button>
         </div>
